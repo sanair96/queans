@@ -1,0 +1,596 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UploadStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum SourcePaperStatus {
+  UPLOADED
+  QUEUED
+  PROCESSING
+  WAITING_FOR_REVIEW
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum WorkflowType {
+  PAPER_INGESTION
+  PAPER_GENERATION
+}
+
+enum WorkflowStatus {
+  PENDING
+  RUNNING
+  WAITING_FOR_REVIEW
+  FAILED
+  COMPLETED
+  CANCELLED
+}
+
+enum WorkflowStepStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+enum OutboxStatus {
+  PENDING
+  STARTED
+  FAILED
+}
+
+enum QuestionType {
+  MCQ
+  SHORT_ANSWER
+  LONG_ANSWER
+  NUMERICAL
+  TRUE_FALSE
+  FILL_IN_THE_BLANK
+  MATCHING
+  DIAGRAM
+  UNKNOWN
+}
+
+enum CandidateStatus {
+  EXTRACTED
+  NEEDS_REVIEW
+  APPROVED
+  EDITED_AND_APPROVED
+  REJECTED
+  DUPLICATE
+  UNPROCESSABLE
+}
+
+enum QuestionStatus {
+  DRAFT
+  APPROVED
+  NEEDS_REVISION
+  ARCHIVED
+}
+
+enum GeneratedPaperStatus {
+  DRAFT
+  NEEDS_REVIEW
+  APPROVED
+  RENDERED
+  PUBLISHED
+  ARCHIVED
+}
+
+enum ReviewEntityType {
+  QUESTION_CANDIDATE
+  GENERATED_PAPER
+  SOLUTION_SHEET
+}
+
+enum ReviewSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ReviewStatus {
+  OPEN
+  ASSIGNED
+  APPROVED
+  EDITED
+  REJECTED
+  SKIPPED
+}
+
+enum ReviewDecision {
+  APPROVE
+  EDIT_AND_APPROVE
+  REJECT
+  SPLIT
+  MERGE
+  MARK_DUPLICATE
+  NEEDS_MORE_INFO
+  MARK_UNPROCESSABLE
+}
+
+enum ReviewReason {
+  LOW_OCR_CONFIDENCE
+  MISSING_REQUIRED_FIELD
+  LOW_FIELD_CONFIDENCE
+  VALIDATION_FAILED
+  DUPLICATE_CONFLICT
+  ANSWER_UNCERTAIN
+  MATH_OR_DIAGRAM_UNCERTAIN
+  TOPIC_AMBIGUOUS
+  CONTRADICTION_DETECTED
+  MISSING_QUESTION_TEXT
+  MISSING_MARKS
+  MCQ_OPTIONS_MISSING
+  MCQ_CORRECT_ANSWER_MISSING
+  TOPIC_NOT_MAPPED
+  LOW_ANSWER_CONFIDENCE
+  DIAGRAM_ASSET_MISSING
+  LLM_GENERATED_ANSWER_UNVERIFIED
+  LOW_TOPIC_CONFIDENCE
+}
+
+enum CorrectionType {
+  OCR_ERROR
+  WRONG_TOPIC
+  WRONG_ANSWER
+  WRONG_MARKS
+  BAD_SOLUTION
+  BAD_SEGMENTATION
+  DUPLICATE
+  FORMATTING_ISSUE
+}
+
+enum AnswerSourceType {
+  SOURCE_KEY
+  LLM_GENERATED
+  HUMAN_VERIFIED
+}
+
+enum OcrProvider {
+  MISTRAL
+  GOOGLE_DOCUMENT_AI
+}
+
+model UploadObject {
+  id             String       @id @default(uuid())
+  objectKey      String       @unique @map("object_key")
+  fileName       String       @map("file_name")
+  mimeType       String       @map("mime_type")
+  byteSize       BigInt       @map("byte_size")
+  checksumSha256 String?      @map("checksum_sha256")
+  etag           String?
+  status         UploadStatus @default(PENDING)
+  createdAt      DateTime     @default(now()) @map("created_at")
+  completedAt    DateTime?    @map("completed_at")
+
+  sourcePaper SourcePaper?
+
+  @@index([status, createdAt])
+  @@map("upload_objects")
+}
+
+model SourcePaper {
+  id             String            @id @default(uuid())
+  uploadObjectId String            @unique @map("upload_object_id")
+  uploadObject   UploadObject      @relation(fields: [uploadObjectId], references: [id])
+  title          String?
+  sourceFileName String            @map("source_file_name")
+  status         SourcePaperStatus @default(UPLOADED)
+  pageCount      Int?              @map("page_count")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  ocrPages           OcrPage[]
+  questionCandidates QuestionCandidate[]
+  reviewItems        ReviewItem[]
+  workflowRuns       WorkflowRun[]
+
+  @@index([status, createdAt])
+  @@map("source_papers")
+}
+
+model WorkflowRun {
+  id             String         @id @default(uuid())
+  workflowType   WorkflowType   @map("workflow_type")
+  entityId       String         @map("entity_id")
+  sourcePaperId  String?        @map("source_paper_id")
+  sourcePaper    SourcePaper?   @relation(fields: [sourcePaperId], references: [id])
+  temporalRunId  String?        @unique @map("temporal_run_id")
+  status         WorkflowStatus @default(PENDING)
+  currentStep    String?        @map("current_step")
+  inputPayload   Json           @map("input_payload")
+  outputPayload  Json?          @map("output_payload")
+  errorPayload   Json?          @map("error_payload")
+  createdBy      String?        @map("created_by")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+  completedAt    DateTime?      @map("completed_at")
+
+  steps            WorkflowStep[]
+  events           WorkflowEvent[]
+  reviewTasks      ReviewTask[]
+  providerRunCosts ProviderRunCost[]
+  startOutbox      WorkflowStartOutbox?
+
+  @@index([workflowType, status, createdAt])
+  @@index([entityId])
+  @@map("workflow_runs")
+}
+
+model WorkflowStep {
+  id            String             @id @default(uuid())
+  workflowRunId String             @map("workflow_run_id")
+  workflowRun   WorkflowRun        @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+  stepName      String             @map("step_name")
+  status        WorkflowStepStatus @default(PENDING)
+  attemptCount  Int                @default(0) @map("attempt_count")
+  startedAt     DateTime?          @map("started_at")
+  completedAt   DateTime?          @map("completed_at")
+  errorPayload  Json?              @map("error_payload")
+  outputPayload Json?              @map("output_payload")
+
+  @@index([workflowRunId, stepName])
+  @@map("workflow_steps")
+}
+
+model WorkflowEvent {
+  id            String      @id @default(uuid())
+  workflowRunId String      @map("workflow_run_id")
+  workflowRun   WorkflowRun @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+  eventType     String      @map("event_type")
+  eventPayload  Json        @map("event_payload")
+  createdBy     String?     @map("created_by")
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  @@index([workflowRunId, createdAt])
+  @@index([eventType, createdAt])
+  @@map("workflow_events")
+}
+
+model WorkflowStartOutbox {
+  id            String       @id @default(uuid())
+  workflowRunId String       @unique @map("workflow_run_id")
+  workflowRun   WorkflowRun  @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+  status        OutboxStatus @default(PENDING)
+  attemptCount  Int          @default(0) @map("attempt_count")
+  lastError     String?      @map("last_error")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@map("workflow_start_outbox")
+}
+
+model OcrPage {
+  id                String      @id @default(uuid())
+  sourcePaperId     String      @map("source_paper_id")
+  sourcePaper       SourcePaper @relation(fields: [sourcePaperId], references: [id], onDelete: Cascade)
+  provider          OcrProvider
+  pageNumber        Int         @map("page_number")
+  markdown          String
+  plainText         String?     @map("plain_text")
+  averageConfidence Float?      @map("average_confidence")
+  minimumConfidence Float?      @map("minimum_confidence")
+  width             Int?
+  height            Int?
+  dpi               Int?
+  rawJson           Json        @map("raw_json")
+  createdAt         DateTime    @default(now()) @map("created_at")
+
+  ocrBlocks OcrBlock[]
+
+  @@unique([sourcePaperId, provider, pageNumber])
+  @@index([sourcePaperId, pageNumber])
+  @@map("ocr_pages")
+}
+
+model OcrBlock {
+  id           String   @id @default(uuid())
+  ocrPageId    String   @map("ocr_page_id")
+  ocrPage      OcrPage  @relation(fields: [ocrPageId], references: [id], onDelete: Cascade)
+  blockType    String   @map("block_type")
+  text         String
+  confidence   Float?
+  boundingBox  Json?    @map("bounding_box")
+  sourceAsset  Json?    @map("source_asset")
+  rawJson      Json?    @map("raw_json")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([ocrPageId, blockType])
+  @@map("ocr_blocks")
+}
+
+model Chapter {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  topics             Topic[]
+  questionCandidates QuestionCandidate[]
+  questions          Question[]
+
+  @@unique([name])
+  @@map("chapters")
+}
+
+model Topic {
+  id        String  @id @default(uuid())
+  chapterId String? @map("chapter_id")
+  chapter   Chapter? @relation(fields: [chapterId], references: [id])
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  subtopics          Subtopic[]
+  questionCandidates QuestionCandidate[]
+  questions          Question[]
+
+  @@unique([chapterId, name])
+  @@map("topics")
+}
+
+model Subtopic {
+  id        String   @id @default(uuid())
+  topicId   String?  @map("topic_id")
+  topic     Topic?   @relation(fields: [topicId], references: [id])
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  questionCandidates QuestionCandidate[]
+  questions          Question[]
+
+  @@unique([topicId, name])
+  @@map("subtopics")
+}
+
+model QuestionCandidate {
+  id                  String          @id @default(uuid())
+  sourcePaperId       String          @map("source_paper_id")
+  sourcePaper         SourcePaper     @relation(fields: [sourcePaperId], references: [id], onDelete: Cascade)
+  approvedQuestionId  String?         @unique @map("approved_question_id")
+  approvedQuestion    Question?       @relation("ApprovedCandidateQuestion", fields: [approvedQuestionId], references: [id])
+  pageNumber          Int?            @map("page_number")
+  sourcePageStart     Int?            @map("source_page_start")
+  sourcePageEnd       Int?            @map("source_page_end")
+  questionNumber      String?         @map("question_number")
+  sectionName         String?         @map("section_name")
+  rawOcrText          String          @map("raw_ocr_text")
+  cleanedQuestionText String          @map("cleaned_question_text")
+  questionType        QuestionType    @default(UNKNOWN) @map("question_type")
+  marks               Float?
+  options             Json?
+  answerText          String?         @map("answer_text")
+  solutionText        String?         @map("solution_text")
+  chapterId           String?         @map("chapter_id")
+  chapter             Chapter?        @relation(fields: [chapterId], references: [id])
+  topicId             String?         @map("topic_id")
+  topic               Topic?          @relation(fields: [topicId], references: [id])
+  subtopicId          String?         @map("subtopic_id")
+  subtopic            Subtopic?       @relation(fields: [subtopicId], references: [id])
+  difficulty          String?
+  bloomLevel          String?         @map("bloom_level")
+  requiresDiagram     Boolean         @default(false) @map("requires_diagram")
+  diagramAsset        Json?           @map("diagram_asset")
+  extractedPayload    Json            @map("extracted_payload")
+  sourceEvidence      Json            @map("source_evidence")
+  fieldConfidence     Json            @map("field_confidence")
+  overallConfidence   Float           @map("overall_confidence")
+  validationErrors    Json            @map("validation_errors")
+  reviewStatus        CandidateStatus @default(EXTRACTED) @map("review_status")
+  createdAt           DateTime        @default(now()) @map("created_at")
+  updatedAt           DateTime        @updatedAt @map("updated_at")
+
+  answers          Answer[]
+  duplicateMatches DuplicateMatch[]
+  fieldConfidences CandidateFieldConfidence[]
+  reviewItems      ReviewItem[]
+
+  @@index([sourcePaperId, reviewStatus])
+  @@index([chapterId, topicId, subtopicId])
+  @@index([questionType])
+  @@map("question_candidates")
+}
+
+model CandidateFieldConfidence {
+  id         String            @id @default(uuid())
+  candidateId String           @map("candidate_id")
+  candidate  QuestionCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  fieldName  String            @map("field_name")
+  confidence Float
+  reasonCode ReviewReason?     @map("reason_code")
+  createdAt  DateTime          @default(now()) @map("created_at")
+
+  @@unique([candidateId, fieldName])
+  @@map("candidate_field_confidences")
+}
+
+model ReviewTask {
+  id            String           @id @default(uuid())
+  workflowRunId String           @map("workflow_run_id")
+  workflowRun   WorkflowRun      @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+  entityType    ReviewEntityType @map("entity_type")
+  entityId      String           @map("entity_id")
+  reviewType    String           @map("review_type")
+  reasonCodes   Json             @map("reason_codes")
+  severity      ReviewSeverity   @default(MEDIUM)
+  status        ReviewStatus     @default(OPEN)
+  assignedTo    String?          @map("assigned_to")
+  reviewedBy    String?          @map("reviewed_by")
+  reviewPayload Json?            @map("review_payload")
+  createdAt     DateTime         @default(now()) @map("created_at")
+  reviewedAt    DateTime?        @map("reviewed_at")
+
+  @@index([workflowRunId, status])
+  @@index([entityType, entityId])
+  @@map("review_tasks")
+}
+
+model ReviewItem {
+  id            String            @id @default(uuid())
+  candidateId   String            @map("candidate_id")
+  candidate     QuestionCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  sourcePaperId String            @map("source_paper_id")
+  sourcePaper   SourcePaper       @relation(fields: [sourcePaperId], references: [id], onDelete: Cascade)
+  reviewType    String            @map("review_type")
+  severity      ReviewSeverity    @default(MEDIUM)
+  reasonCodes   Json              @map("reason_codes")
+  status        ReviewStatus      @default(OPEN)
+  assignedTo    String?           @map("assigned_to")
+  reviewedBy    String?           @map("reviewed_by")
+  reviewNotes   String?           @map("review_notes")
+  reviewPayload Json?             @map("review_payload")
+  decision      ReviewDecision?
+  createdAt     DateTime          @default(now()) @map("created_at")
+  reviewedAt    DateTime?         @map("reviewed_at")
+
+  corrections ReviewCorrection[]
+
+  @@index([sourcePaperId, status])
+  @@index([candidateId, status])
+  @@map("review_items")
+}
+
+model ReviewCorrection {
+  id             String          @id @default(uuid())
+  reviewItemId   String          @map("review_item_id")
+  reviewItem     ReviewItem      @relation(fields: [reviewItemId], references: [id], onDelete: Cascade)
+  fieldName      String          @map("field_name")
+  oldValue       Json?           @map("old_value")
+  newValue       Json?           @map("new_value")
+  correctionType CorrectionType  @map("correction_type")
+  reviewerId     String?         @map("reviewer_id")
+  createdAt      DateTime        @default(now()) @map("created_at")
+
+  @@index([reviewItemId, fieldName])
+  @@map("review_corrections")
+}
+
+model Question {
+  id                String              @id @default(uuid())
+  sourceCandidate   QuestionCandidate?  @relation("ApprovedCandidateQuestion")
+  questionText      String              @map("question_text")
+  questionType      QuestionType        @map("question_type")
+  marks             Float?
+  options           Json?
+  chapterId         String?             @map("chapter_id")
+  chapter           Chapter?            @relation(fields: [chapterId], references: [id])
+  topicId           String?             @map("topic_id")
+  topic             Topic?              @relation(fields: [topicId], references: [id])
+  subtopicId        String?             @map("subtopic_id")
+  subtopic          Subtopic?           @relation(fields: [subtopicId], references: [id])
+  difficulty        String?
+  bloomLevel        String?             @map("bloom_level")
+  status            QuestionStatus      @default(APPROVED)
+  sourceEvidence    Json                @map("source_evidence")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+  archivedAt        DateTime?           @map("archived_at")
+
+  answers          Answer[]
+  duplicateMatches DuplicateMatch[]
+  generatedPaperItems GeneratedPaperItem[]
+
+  @@index([status, createdAt])
+  @@index([chapterId, topicId, subtopicId])
+  @@map("questions")
+}
+
+model Answer {
+  id              String             @id @default(uuid())
+  questionId      String?            @map("question_id")
+  question        Question?          @relation(fields: [questionId], references: [id])
+  candidateId     String?            @map("candidate_id")
+  candidate       QuestionCandidate? @relation(fields: [candidateId], references: [id])
+  answerText      String             @map("answer_text")
+  solutionText    String?            @map("solution_text")
+  sourceType      AnswerSourceType   @map("source_type")
+  reviewStatus    ReviewStatus       @default(OPEN) @map("review_status")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+
+  @@index([questionId, reviewStatus])
+  @@index([candidateId])
+  @@map("answers")
+}
+
+model DuplicateMatch {
+  id             String             @id @default(uuid())
+  candidateId    String             @map("candidate_id")
+  candidate      QuestionCandidate  @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  questionId     String?            @map("question_id")
+  question       Question?          @relation(fields: [questionId], references: [id])
+  similarity     Float
+  conflict       Boolean            @default(false)
+  details        Json?
+  createdAt      DateTime           @default(now()) @map("created_at")
+
+  @@index([candidateId, conflict])
+  @@index([questionId])
+  @@map("duplicate_matches")
+}
+
+model ProviderRunCost {
+  id               String      @id @default(uuid())
+  workflowRunId    String      @map("workflow_run_id")
+  workflowRun      WorkflowRun @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+  provider         String
+  model            String
+  operation        String
+  pageCount        Int?        @map("page_count")
+  inputTokenCount  Int?        @map("input_token_count")
+  outputTokenCount Int?        @map("output_token_count")
+  estimatedCostUsd Decimal?    @map("estimated_cost_usd") @db.Decimal(12, 6)
+  rawUsage         Json?       @map("raw_usage")
+  createdAt        DateTime    @default(now()) @map("created_at")
+
+  @@index([workflowRunId, operation])
+  @@map("provider_run_costs")
+}
+
+model GeneratedPaper {
+  id             String               @id @default(uuid())
+  workflowRunId  String?              @map("workflow_run_id")
+  title          String
+  requestedSchema Json                @map("requested_schema")
+  actualSchema   Json?                @map("actual_schema")
+  warnings       Json?
+  status         GeneratedPaperStatus @default(DRAFT)
+  renderedObjectKey String?           @map("rendered_object_key")
+  solutionObjectKey String?           @map("solution_object_key")
+  createdAt      DateTime             @default(now()) @map("created_at")
+  updatedAt      DateTime             @updatedAt @map("updated_at")
+
+  items GeneratedPaperItem[]
+
+  @@index([status, createdAt])
+  @@map("generated_papers")
+}
+
+model GeneratedPaperItem {
+  id               String         @id @default(uuid())
+  generatedPaperId String         @map("generated_paper_id")
+  generatedPaper   GeneratedPaper @relation(fields: [generatedPaperId], references: [id], onDelete: Cascade)
+  questionId        String         @map("question_id")
+  question          Question       @relation(fields: [questionId], references: [id])
+  position          Int
+  marks             Float?
+  sectionName       String?        @map("section_name")
+  createdAt         DateTime       @default(now()) @map("created_at")
+
+  @@unique([generatedPaperId, position])
+  @@map("generated_paper_items")
+}
+
