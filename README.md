@@ -47,6 +47,8 @@ Copy `.env.example` to `.env` and fill these before runtime testing:
 - `R2_BUCKET`
 - `MISTRAL_API_KEY`
 
+The API and worker load `.env` automatically in local development. Shell-provided values still override `.env`, which is useful when running the Docker database on a non-default host port.
+
 Optional Google Document AI benchmarking needs:
 
 - `DOCUMENT_AI_ENABLED=true`
@@ -72,11 +74,23 @@ Start Docker Desktop or another Docker daemon, then start Postgres 18 and Tempor
 pnpm docker:up
 ```
 
+If another local project already owns Postgres port `5432`, keep that process running and start Queans on alternate host ports:
+
+```bash
+POSTGRES_PORT=55432 TEMPORAL_POSTGRES_PORT=55433 pnpm docker:up
+```
+
 Generate the Prisma client and apply the migration:
 
 ```bash
 pnpm db:generate
 pnpm db:migrate
+```
+
+When using the alternate app database port, override the migration URL:
+
+```bash
+DATABASE_URL="postgresql://queans:queans@localhost:55432/queans_dev?schema=public" pnpm db:migrate
 ```
 
 Run the app:

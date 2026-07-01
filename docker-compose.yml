@@ -10,7 +10,7 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - queans_app_postgres_data:/var/lib/postgresql/data
+      - queans_app_postgres18_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -28,7 +28,7 @@ services:
     ports:
       - "${TEMPORAL_POSTGRES_PORT:-5433}:5432"
     volumes:
-      - queans_temporal_postgres_data:/var/lib/postgresql/data
+      - queans_temporal_postgres18_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -43,12 +43,12 @@ services:
       temporal-postgres:
         condition: service_healthy
     environment:
-      DB: postgresql
+      DB: postgres12
       DB_PORT: 5432
       POSTGRES_USER: ${TEMPORAL_POSTGRES_USER:-temporal}
       POSTGRES_PWD: ${TEMPORAL_POSTGRES_PASSWORD:-temporal}
       POSTGRES_SEEDS: temporal-postgres
-      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/docker.yaml
       ENABLE_ES: "false"
     ports:
       - "7233:7233"
@@ -66,6 +66,5 @@ services:
       - "8233:8080"
 
 volumes:
-  queans_app_postgres_data:
-  queans_temporal_postgres_data:
-
+  queans_app_postgres18_data:
+  queans_temporal_postgres18_data:

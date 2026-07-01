@@ -1,3 +1,5 @@
+import "dotenv/config";
+
 import { NativeConnection, Worker } from "@temporalio/worker";
 
 import { loadWorkerConfig } from "./config.js";
@@ -31,4 +33,3 @@ const llmWorker = await Worker.create({
 });
 
 await Promise.all([workflowWorker.run(), ocrWorker.run(), llmWorker.run()]);
-

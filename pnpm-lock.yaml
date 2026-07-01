@@ -44,6 +44,9 @@ importers:
       '@temporalio/client':
         specifier: ^1.12.1
         version: 1.18.1
+      dotenv:
+        specifier: ^17.4.2
+        version: 17.4.2
       fastify:
         specifier: ^5.2.1
         version: 5.9.0
@@ -106,6 +109,9 @@ importers:
       '@temporalio/workflow':
         specifier: ^1.12.1
         version: 1.18.1
+      dotenv:
+        specifier: ^17.4.2
+        version: 17.4.2
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -1695,6 +1701,10 @@ packages:
 
   dotenv@16.6.1:
     resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
+    engines: {node: '>=12'}
+
+  dotenv@17.4.2:
+    resolution: {integrity: sha512-nI4U3TottKAcAD9LLud4Cb7b2QztQMUEfHbvhTH09bqXTxnSie8WnjPALV/WMCrJZ6UV/qHJ6L03OqO3LcdYZw==}
     engines: {node: '>=12'}
 
   effect@3.21.0:
@@ -4082,6 +4092,8 @@ snapshots:
     optional: true
 
   dotenv@16.6.1: {}
+
+  dotenv@17.4.2: {}
 
   effect@3.21.0:
     dependencies:

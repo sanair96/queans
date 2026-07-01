@@ -1,3 +1,5 @@
+import "dotenv/config";
+
 import { loadConfig } from "./config.js";
 import { startOutboxDispatcher } from "./outbox.js";
 import { buildServer } from "./server.js";
@@ -33,4 +35,3 @@ await app.listen({
   port: config.API_PORT,
   host: "0.0.0.0"
 });
-
