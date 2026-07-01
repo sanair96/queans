@@ -371,6 +371,7 @@ model QuestionCandidate {
   sourcePaper         SourcePaper      @relation(fields: [sourcePaperId], references: [id], onDelete: Cascade)
   approvedQuestionId  String?          @unique @map("approved_question_id")
   approvedQuestion    Question?        @relation("ApprovedCandidateQuestion", fields: [approvedQuestionId], references: [id])
+  fingerprint         String
   pageNumber          Int?             @map("page_number")
   sourcePageStart     Int?             @map("source_page_start")
   sourcePageEnd       Int?             @map("source_page_end")
@@ -412,6 +413,7 @@ model QuestionCandidate {
   @@index([sourcePaperId, reviewStatus])
   @@index([chapterId, topicId, subtopicId])
   @@index([questionType])
+  @@unique([sourcePaperId, fingerprint])
   @@map("question_candidates")
 }
 
