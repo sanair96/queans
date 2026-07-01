@@ -9,6 +9,7 @@ import { loadR2ConfigFromEnv, R2ObjectStore } from "@queans/providers";
 import type { UploadCompleteInput } from "@queans/core";
 import type { ApiConfig } from "./config.js";
 import { dispatchPendingWorkflowStarts } from "./outbox.js";
+import { checkReadiness } from "./readiness.js";
 import { signalHumanReviewCompleted } from "./temporal.js";
 import { toInputJson, toNullableInputJson } from "./json.js";
 
@@ -18,6 +19,11 @@ interface IdParams {
 
 export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
   app.get("/health", () => ({ ok: true }));
+
+  app.get("/ready", async (_request, reply) => {
+    const result = await checkReadiness(config);
+    return reply.code(result.ok ? 200 : 503).send(result);
+  });
 
   app.post("/api/uploads/init", async (request, reply) => {
     const r2 = getR2ObjectStoreOrReply(reply);
