@@ -6,7 +6,7 @@ import {
   type ReviewReasonCode,
   type WorkflowFailurePayload
 } from "@queans/core";
-import { CandidateStatus, prisma, Prisma } from "@queans/db";
+import { CandidateStatus, prisma, Prisma, ReviewStatus } from "@queans/db";
 
 import {
   duplicateMatchThreshold,
@@ -421,7 +421,7 @@ export async function commitApprovedCandidates(input: PaperIngestionWorkflowInpu
             answerText: candidate.answerText,
             solutionText: candidate.solutionText,
             sourceType: candidate.answerSourceType,
-            reviewStatus: candidate.answerSourceType === "LLM_GENERATED" ? "OPEN" : "APPROVED"
+            reviewStatus: answerReviewStatusForCandidate(candidate)
           }
         });
       }
@@ -627,6 +627,21 @@ export function candidateUpdateForReviewedItem(
     default:
       return {};
   }
+}
+
+export function answerReviewStatusForCandidate(candidate: {
+  answerSourceBacked: boolean;
+  answerSourceType: string;
+}) {
+  if (
+    candidate.answerSourceBacked ||
+    candidate.answerSourceType === "SOURCE_KEY" ||
+    candidate.answerSourceType === "HUMAN_VERIFIED"
+  ) {
+    return ReviewStatus.APPROVED;
+  }
+
+  return ReviewStatus.OPEN;
 }
 
 function candidatePatchFromReviewPayload(value: Prisma.JsonValue): Prisma.QuestionCandidateUpdateInput {

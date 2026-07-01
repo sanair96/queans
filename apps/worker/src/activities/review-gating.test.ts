@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { CandidateStatus } from "@queans/db";
+import { CandidateStatus, ReviewStatus } from "@queans/db";
 
-import { candidateUpdateForReviewedItem, reviewGateForConfidenceDecision } from "./app.activities.js";
+import {
+  answerReviewStatusForCandidate,
+  candidateUpdateForReviewedItem,
+  reviewGateForConfidenceDecision
+} from "./app.activities.js";
 
 describe("reviewGateForConfidenceDecision", () => {
   it("auto-approves clean candidates without creating review work", () => {
@@ -57,5 +61,40 @@ describe("candidateUpdateForReviewedItem", () => {
       answerSourceType: "HUMAN_VERIFIED",
       answerSourceBacked: true
     });
+  });
+});
+
+describe("answerReviewStatusForCandidate", () => {
+  it("approves source-validated generated answers that pass candidate gating", () => {
+    expect(
+      answerReviewStatusForCandidate({
+        answerSourceType: "LLM_GENERATED",
+        answerSourceBacked: true
+      })
+    ).toBe(ReviewStatus.APPROVED);
+  });
+
+  it("keeps unvalidated generated answers open for answer review", () => {
+    expect(
+      answerReviewStatusForCandidate({
+        answerSourceType: "LLM_GENERATED",
+        answerSourceBacked: false
+      })
+    ).toBe(ReviewStatus.OPEN);
+  });
+
+  it("approves source-key and human-verified answers", () => {
+    expect(
+      answerReviewStatusForCandidate({
+        answerSourceType: "SOURCE_KEY",
+        answerSourceBacked: false
+      })
+    ).toBe(ReviewStatus.APPROVED);
+    expect(
+      answerReviewStatusForCandidate({
+        answerSourceType: "HUMAN_VERIFIED",
+        answerSourceBacked: false
+      })
+    ).toBe(ReviewStatus.APPROVED);
   });
 });
