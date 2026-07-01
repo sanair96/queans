@@ -112,10 +112,11 @@ Default URLs:
 3. `POST /api/uploads/:id/complete` verifies the object, creates the source paper and ingestion run, and starts the workflow via the outbox.
 4. Temporal runs OCR on the private R2 object using a short-lived signed read URL.
 5. The extraction activity converts OCR pages into structured `question_candidates`.
-6. The confidence policy auto-approves only source-backed, high-confidence candidates.
-7. Ambiguous candidates create `review_items` with reason codes and source evidence.
-8. Human review updates the review item and signals the Temporal workflow.
-9. Approved candidates are copied into `questions` and `answers`.
+6. The dedupe step compares candidates with approved bank questions and persists likely `duplicate_matches`.
+7. The confidence policy auto-approves only source-backed, high-confidence candidates.
+8. Ambiguous or conflicting candidates create `review_items` with reason codes and source evidence.
+9. Human review updates the review item and signals the Temporal workflow.
+10. Approved candidates are copied into `questions` and `answers`.
 
 ## Confidence Policy
 

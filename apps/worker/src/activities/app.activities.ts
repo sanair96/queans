@@ -7,6 +7,11 @@ import {
 } from "@queans/core";
 import { prisma, Prisma } from "@queans/db";
 
+import {
+  duplicateMatchThreshold,
+  isDuplicateConflict,
+  questionTextSimilarity
+} from "./duplicate-detection.js";
 import { candidateOcrConfidence } from "./ocr-confidence.js";
 import { toInputJson } from "../json.js";
 
@@ -75,12 +80,113 @@ export async function recordStepSucceeded(
   ]);
 }
 
+export async function detectDuplicateCandidates(input: PaperIngestionWorkflowInput) {
+  const [candidates, approvedQuestions] = await Promise.all([
+    prisma.questionCandidate.findMany({
+      where: {
+        sourcePaperId: input.sourcePaperId,
+        approvedQuestionId: null,
+        reviewStatus: { in: ["EXTRACTED", "NEEDS_REVIEW"] }
+      },
+      select: {
+        id: true,
+        cleanedQuestionText: true
+      }
+    }),
+    prisma.question.findMany({
+      where: { status: "APPROVED" },
+      select: {
+        id: true,
+        questionText: true
+      }
+    })
+  ]);
+
+  if (candidates.length === 0) {
+    return {
+      candidatesChecked: candidates.length,
+      duplicateMatchesCreated: 0,
+      duplicateConflicts: 0
+    };
+  }
+
+  const candidateIds = candidates.map((candidate) => candidate.id);
+
+  if (approvedQuestions.length === 0) {
+    await prisma.duplicateMatch.deleteMany({
+      where: {
+        candidateId: { in: candidateIds }
+      }
+    });
+
+    return {
+      candidatesChecked: candidates.length,
+      duplicateMatchesCreated: 0,
+      duplicateConflicts: 0
+    };
+  }
+
+  let duplicateMatchesCreated = 0;
+  let duplicateConflicts = 0;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.duplicateMatch.deleteMany({
+      where: {
+        candidateId: { in: candidateIds }
+      }
+    });
+
+    for (const candidate of candidates) {
+      for (const question of approvedQuestions) {
+        const similarity = questionTextSimilarity(candidate.cleanedQuestionText, question.questionText);
+        if (similarity < duplicateMatchThreshold) {
+          continue;
+        }
+
+        const conflict = isDuplicateConflict(similarity);
+        await tx.duplicateMatch.create({
+          data: {
+            candidateId: candidate.id,
+            questionId: question.id,
+            similarity,
+            conflict,
+            details: toInputJson({
+              matchedQuestionText: question.questionText
+            })
+          }
+        });
+        duplicateMatchesCreated += 1;
+        if (conflict) {
+          duplicateConflicts += 1;
+        }
+      }
+    }
+  });
+
+  return {
+    candidatesChecked: candidates.length,
+    duplicateMatchesCreated,
+    duplicateConflicts
+  };
+}
+
 export async function createReviewItemsForCandidates(input: PaperIngestionWorkflowInput) {
   const [candidates, ocrPages] = await Promise.all([
     prisma.questionCandidate.findMany({
       where: {
         sourcePaperId: input.sourcePaperId,
         reviewStatus: { in: ["NEEDS_REVIEW", "EXTRACTED"] }
+      },
+      include: {
+        duplicateMatches: {
+          where: { conflict: true },
+          select: {
+            id: true,
+            questionId: true,
+            similarity: true,
+            details: true
+          }
+        }
       }
     }),
     prisma.ocrPage.findMany({
@@ -98,6 +204,7 @@ export async function createReviewItemsForCandidates(input: PaperIngestionWorkfl
     const fieldConfidence = confidenceRecord(candidate.fieldConfidence);
     const result = evaluateCandidateConfidence({
       ocr: candidateOcrConfidence(candidate, ocrPages),
+      duplicateConflict: candidate.duplicateMatches.length > 0,
       fields: {
         question_text: {
           confidence: fieldConfidence.question_text ?? 0,
@@ -187,6 +294,7 @@ export async function createReviewItemsForCandidates(input: PaperIngestionWorkfl
           status: "OPEN",
           reviewPayload: toInputJson({
             fieldReviewReasons: result.fieldReviewReasons,
+            duplicateMatches: candidate.duplicateMatches,
             sourceEvidence: candidate.sourceEvidence
           })
         }

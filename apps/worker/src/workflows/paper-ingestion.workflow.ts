@@ -60,6 +60,11 @@ export async function PaperIngestionWorkflow(input: PaperIngestionWorkflowInput)
     const extraction = await llm.extractQuestionsAndPersist(input);
     await app.recordStepSucceeded(input, "extract_question_candidates", extraction);
 
+    currentStep = "dedupe_check";
+    await app.recordStepStarted(input, "dedupe_check");
+    const duplicateSummary = await app.detectDuplicateCandidates(input);
+    await app.recordStepSucceeded(input, "dedupe_check", duplicateSummary);
+
     currentStep = "validate_candidates";
     await app.recordStepStarted(input, "validate_candidates");
     const reviewSummary = await app.createReviewItemsForCandidates(input);
