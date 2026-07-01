@@ -2,7 +2,8 @@ import {
   evaluateCandidateConfidence,
   type PaperIngestionStep,
   type PaperIngestionWorkflowInput,
-  type ReviewReasonCode
+  type ReviewReasonCode,
+  type WorkflowFailurePayload
 } from "@queans/core";
 import { prisma, Prisma } from "@queans/db";
 
@@ -316,6 +317,60 @@ export async function markWorkflowCompleted(input: PaperIngestionWorkflowInput) 
       }
     })
   ]);
+}
+
+export async function markWorkflowFailed(
+  input: PaperIngestionWorkflowInput,
+  stepName: PaperIngestionStep,
+  failurePayload: WorkflowFailurePayload
+) {
+  const latestRunningStep = await prisma.workflowStep.findFirst({
+    where: {
+      workflowRunId: input.ingestionRunId,
+      stepName,
+      status: "RUNNING"
+    },
+    orderBy: { startedAt: "desc" }
+  });
+
+  await prisma.$transaction(async (tx) => {
+    if (latestRunningStep) {
+      await tx.workflowStep.update({
+        where: { id: latestRunningStep.id },
+        data: {
+          status: "FAILED",
+          completedAt: new Date(),
+          errorPayload: toInputJson(failurePayload)
+        }
+      });
+    }
+
+    await tx.workflowRun.update({
+      where: { id: input.ingestionRunId },
+      data: {
+        status: "FAILED",
+        currentStep: stepName,
+        errorPayload: toInputJson(failurePayload),
+        completedAt: new Date()
+      }
+    });
+
+    await tx.sourcePaper.update({
+      where: { id: input.sourcePaperId },
+      data: { status: "FAILED" }
+    });
+
+    await tx.workflowEvent.create({
+      data: {
+        workflowRunId: input.ingestionRunId,
+        eventType: "WORKFLOW_FAILED",
+        eventPayload: toInputJson({
+          stepName,
+          ...failurePayload
+        })
+      }
+    });
+  });
 }
 
 function confidenceRecord(value: Prisma.JsonValue) {

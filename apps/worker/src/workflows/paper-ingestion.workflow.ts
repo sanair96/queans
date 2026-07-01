@@ -3,6 +3,8 @@ import { condition, defineSignal, proxyActivities, setHandler } from "@temporali
 import {
   PAPER_LLM_TASK_QUEUE,
   PAPER_OCR_TASK_QUEUE,
+  serializeWorkflowFailure,
+  type PaperIngestionStep,
   type HumanReviewCompletedSignal,
   type PaperIngestionWorkflowInput
 } from "@queans/core";
@@ -22,6 +24,7 @@ export const humanReviewCompleted = defineSignal<[HumanReviewCompletedSignal]>("
 
 export async function PaperIngestionWorkflow(input: PaperIngestionWorkflowInput) {
   let reviewSignalCount = 0;
+  let currentStep: PaperIngestionStep = "store_file";
   setHandler(humanReviewCompleted, () => {
     reviewSignalCount += 1;
   });
@@ -42,33 +45,46 @@ export async function PaperIngestionWorkflow(input: PaperIngestionWorkflowInput)
     }
   });
 
-  await app.recordStepStarted(input, "store_file");
-  await app.recordStepSucceeded(input, "store_file", { sourcePaperId: input.sourcePaperId });
+  try {
+    currentStep = "store_file";
+    await app.recordStepStarted(input, "store_file");
+    await app.recordStepSucceeded(input, "store_file", { sourcePaperId: input.sourcePaperId });
 
-  await app.recordStepStarted(input, "run_ocr");
-  await ocr.runOcrAndPersist(input);
-  await app.recordStepSucceeded(input, "run_ocr", {});
+    currentStep = "run_ocr";
+    await app.recordStepStarted(input, "run_ocr");
+    await ocr.runOcrAndPersist(input);
+    await app.recordStepSucceeded(input, "run_ocr", {});
 
-  await app.recordStepStarted(input, "extract_question_candidates");
-  const extraction = await llm.extractQuestionsAndPersist(input);
-  await app.recordStepSucceeded(input, "extract_question_candidates", extraction);
+    currentStep = "extract_question_candidates";
+    await app.recordStepStarted(input, "extract_question_candidates");
+    const extraction = await llm.extractQuestionsAndPersist(input);
+    await app.recordStepSucceeded(input, "extract_question_candidates", extraction);
 
-  await app.recordStepStarted(input, "validate_candidates");
-  const reviewSummary = await app.createReviewItemsForCandidates(input);
-  await app.recordStepSucceeded(input, "validate_candidates", reviewSummary);
+    currentStep = "validate_candidates";
+    await app.recordStepStarted(input, "validate_candidates");
+    const reviewSummary = await app.createReviewItemsForCandidates(input);
+    await app.recordStepSucceeded(input, "validate_candidates", reviewSummary);
 
-  while (await app.hasOpenReviewItems(input)) {
-    const previousSignalCount = reviewSignalCount;
-    await app.markWaitingForReview(input);
-    await condition(() => reviewSignalCount > previousSignalCount);
-    await app.recordStepStarted(input, "apply_human_corrections");
-    await app.applyReviewedItems(input);
-    await app.recordStepSucceeded(input, "apply_human_corrections", {});
+    while (await app.hasOpenReviewItems(input)) {
+      const previousSignalCount = reviewSignalCount;
+      currentStep = "wait_for_review";
+      await app.markWaitingForReview(input);
+      await condition(() => reviewSignalCount > previousSignalCount);
+      currentStep = "apply_human_corrections";
+      await app.recordStepStarted(input, "apply_human_corrections");
+      await app.applyReviewedItems(input);
+      await app.recordStepSucceeded(input, "apply_human_corrections", {});
+    }
+
+    currentStep = "commit_to_question_bank";
+    await app.recordStepStarted(input, "commit_to_question_bank");
+    const commitSummary = await app.commitApprovedCandidates(input);
+    await app.recordStepSucceeded(input, "commit_to_question_bank", commitSummary);
+
+    currentStep = "complete";
+    await app.markWorkflowCompleted(input);
+  } catch (error) {
+    await app.markWorkflowFailed(input, currentStep, serializeWorkflowFailure(error));
+    throw error;
   }
-
-  await app.recordStepStarted(input, "commit_to_question_bank");
-  const commitSummary = await app.commitApprovedCandidates(input);
-  await app.recordStepSucceeded(input, "commit_to_question_bank", commitSummary);
-
-  await app.markWorkflowCompleted(input);
 }
