@@ -133,4 +133,36 @@ describe("buildServer", () => {
       await app.close();
     }
   });
+
+  it("rejects blank edit approvals before loading review items", async () => {
+    const app = await buildServer(apiConfig);
+    try {
+      const response = await app.inject({
+        method: "PATCH",
+        url: "/api/review/tasks/review-item-1",
+        payload: {
+          decision: "EDIT_AND_APPROVE",
+          reviewPayload: {
+            candidate: {
+              cleanedQuestionText: "",
+              answerText: "Valid answer"
+            }
+          }
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({
+        error: "VALIDATION_ERROR",
+        issues: [
+          {
+            path: ["reviewPayload", "candidate", "cleanedQuestionText"],
+            message: "Question text is required for edit approval."
+          }
+        ]
+      });
+    } finally {
+      await app.close();
+    }
+  });
 });

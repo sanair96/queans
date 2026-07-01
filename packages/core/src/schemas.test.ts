@@ -77,7 +77,6 @@ describe("reviewPatchSchema", () => {
   it("accepts review decisions that are implemented by the ingestion workflow", () => {
     for (const decision of [
       "APPROVE",
-      "EDIT_AND_APPROVE",
       "REJECT",
       "MARK_DUPLICATE",
       "NEEDS_MORE_INFO",
@@ -90,5 +89,54 @@ describe("reviewPatchSchema", () => {
   it("rejects split and merge until candidate rewrite semantics are implemented", () => {
     expect(() => reviewPatchSchema.parse({ decision: "SPLIT" })).toThrow();
     expect(() => reviewPatchSchema.parse({ decision: "MERGE" })).toThrow();
+  });
+
+  it("accepts edit approval with non-empty candidate text and answer", () => {
+    expect(
+      reviewPatchSchema.parse({
+        decision: "EDIT_AND_APPROVE",
+        reviewPayload: {
+          candidate: {
+            cleanedQuestionText: "What is inertia?",
+            answerText: "The tendency to resist change in motion.",
+            solutionText: "",
+            marks: 2,
+            difficulty: "easy"
+          }
+        }
+      })
+    ).toMatchObject({
+      decision: "EDIT_AND_APPROVE"
+    });
+  });
+
+  it("rejects edit approval with blank candidate text or answer", () => {
+    expect(() =>
+      reviewPatchSchema.parse({
+        decision: "EDIT_AND_APPROVE",
+        reviewPayload: {
+          candidate: {
+            cleanedQuestionText: " ",
+            answerText: "Valid answer"
+          }
+        }
+      })
+    ).toThrow("Question text is required for edit approval.");
+
+    expect(() =>
+      reviewPatchSchema.parse({
+        decision: "EDIT_AND_APPROVE",
+        reviewPayload: {
+          candidate: {
+            cleanedQuestionText: "Valid question",
+            answerText: ""
+          }
+        }
+      })
+    ).toThrow("Answer text is required for edit approval.");
+  });
+
+  it("does not require edit payloads for non-edit decisions", () => {
+    expect(reviewPatchSchema.parse({ decision: "APPROVE" })).toEqual({ decision: "APPROVE" });
   });
 });

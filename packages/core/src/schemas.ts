@@ -34,38 +34,68 @@ export const uploadCompleteSchema = z.object({
   paperContext: paperContextSchema.optional()
 });
 
-export const reviewPatchSchema = z.object({
-  decision: z.enum([
-    "APPROVE",
-    "EDIT_AND_APPROVE",
-    "REJECT",
-    "MARK_DUPLICATE",
-    "NEEDS_MORE_INFO",
-    "MARK_UNPROCESSABLE"
-  ]),
-  reviewedBy: z.string().min(1).optional(),
-  reviewNotes: z.string().optional(),
-  reviewPayload: z.unknown().optional(),
-  corrections: z
-    .array(
-      z.object({
-        fieldName: z.string().min(1),
-        oldValue: z.unknown().optional(),
-        newValue: z.unknown().optional(),
-        correctionType: z.enum([
-          "OCR_ERROR",
-          "WRONG_TOPIC",
-          "WRONG_ANSWER",
-          "WRONG_MARKS",
-          "BAD_SOLUTION",
-          "BAD_SEGMENTATION",
-          "DUPLICATE",
-          "FORMATTING_ISSUE"
-        ])
-      })
-    )
-    .optional()
+const reviewDecisionSchema = z.enum([
+  "APPROVE",
+  "EDIT_AND_APPROVE",
+  "REJECT",
+  "MARK_DUPLICATE",
+  "NEEDS_MORE_INFO",
+  "MARK_UNPROCESSABLE"
+]);
+
+const editAndApprovePayloadSchema = z.object({
+  candidate: z.object({
+    cleanedQuestionText: z.string().trim().min(1, "Question text is required for edit approval."),
+    answerText: z.string().trim().min(1, "Answer text is required for edit approval."),
+    solutionText: z.string().optional(),
+    marks: z.number().nonnegative().nullable().optional(),
+    difficulty: z.string().optional()
+  })
 });
+
+export const reviewPatchSchema = z
+  .object({
+    decision: reviewDecisionSchema,
+    reviewedBy: z.string().min(1).optional(),
+    reviewNotes: z.string().optional(),
+    reviewPayload: z.unknown().optional(),
+    corrections: z
+      .array(
+        z.object({
+          fieldName: z.string().min(1),
+          oldValue: z.unknown().optional(),
+          newValue: z.unknown().optional(),
+          correctionType: z.enum([
+            "OCR_ERROR",
+            "WRONG_TOPIC",
+            "WRONG_ANSWER",
+            "WRONG_MARKS",
+            "BAD_SOLUTION",
+            "BAD_SEGMENTATION",
+            "DUPLICATE",
+            "FORMATTING_ISSUE"
+          ])
+        })
+      )
+      .optional()
+  })
+  .superRefine((value, context) => {
+    if (value.decision !== "EDIT_AND_APPROVE") {
+      return;
+    }
+
+    const parsed = editAndApprovePayloadSchema.safeParse(value.reviewPayload);
+    if (parsed.success) {
+      return;
+    }
+
+    for (const issue of parsed.error.issues) {
+      context.addIssue({
+        ...issue,
+        path: ["reviewPayload", ...issue.path]
+      });
+    }
+  });
 
 export type UploadInitInput = z.infer<typeof uploadInitSchema>;
 export type UploadCompleteInput = z.infer<typeof uploadCompleteSchema>;
