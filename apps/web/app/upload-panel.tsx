@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, UploadCloud } from "lucide-react";
+import Link from "next/link";
+import { CheckCircle2, ListChecks, UploadCloud } from "lucide-react";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -98,6 +99,12 @@ export function UploadPanel() {
           <p className="muted">
             <CheckCircle2 size={16} aria-hidden="true" /> Run {run.ingestionRunId} is {run.status}.
           </p>
+        ) : null}
+        {run ? (
+          <Link className="btn secondary inline-link" href={`/runs?run=${run.ingestionRunId}`}>
+            <ListChecks size={16} aria-hidden="true" />
+            Open run
+          </Link>
         ) : null}
       </div>
     </section>
