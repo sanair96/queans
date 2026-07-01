@@ -6,7 +6,7 @@ import { loadMistralConfigFromEnv, MistralQuestionExtractor } from "@queans/prov
 import type { ExtractedQuestionCandidate } from "@queans/providers";
 
 import { toInputJson } from "../json.js";
-import { estimateMistralExtractorCostUsd, formatCostDecimal, loadProviderPricing } from "./provider-cost.js";
+import { estimateMistralExtractorCostUsd, formatCostDecimal, loadProviderPricing, upsertProviderRunCost } from "./provider-cost.js";
 import { normalizeTaxonomyName } from "./taxonomy.js";
 
 export async function extractQuestionsAndPersist(input: PaperIngestionWorkflowInput) {
@@ -137,17 +137,15 @@ export async function extractQuestionsAndPersist(input: PaperIngestionWorkflowIn
       }
     }
 
-    await tx.providerRunCost.create({
-      data: {
-        workflowRunId: input.ingestionRunId,
-        provider: extraction.provider,
-        model: extraction.model,
-        operation: "question_extraction",
-        inputTokenCount: extraction.usage.promptTokens ?? null,
-        outputTokenCount: extraction.usage.completionTokens ?? null,
-        estimatedCostUsd: formatCostDecimal(estimatedCostUsd),
-        rawUsage: toInputJson(extraction.usage)
-      }
+    await upsertProviderRunCost(tx, {
+      workflowRunId: input.ingestionRunId,
+      provider: extraction.provider,
+      model: extraction.model,
+      operation: "question_extraction",
+      inputTokenCount: extraction.usage.promptTokens ?? null,
+      outputTokenCount: extraction.usage.completionTokens ?? null,
+      estimatedCostUsd: formatCostDecimal(estimatedCostUsd),
+      rawUsage: toInputJson(extraction.usage)
     });
   });
 

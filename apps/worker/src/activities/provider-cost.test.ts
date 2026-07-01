@@ -4,7 +4,8 @@ import {
   estimateMistralExtractorCostUsd,
   estimateMistralOcrCostUsd,
   formatCostDecimal,
-  loadProviderPricing
+  loadProviderPricing,
+  providerRunCostUpsertArgs
 } from "./provider-cost.js";
 
 describe("provider cost estimation", () => {
@@ -56,5 +57,77 @@ describe("provider cost estimation", () => {
         MISTRAL_OCR_USD_PER_1000_PAGES: "-1"
       })
     ).toThrow("MISTRAL_OCR_USD_PER_1000_PAGES must be a non-negative number");
+  });
+});
+
+describe("providerRunCostUpsertArgs", () => {
+  it("uses workflow run and operation as the retry idempotency key", () => {
+    expect(
+      providerRunCostUpsertArgs({
+        workflowRunId: "run-1",
+        provider: "MISTRAL",
+        model: "mistral-ocr-latest",
+        operation: "ocr",
+        pageCount: 3,
+        estimatedCostUsd: "0.012000",
+        rawUsage: { pagesProcessed: 3 }
+      })
+    ).toMatchObject({
+      where: {
+        workflowRunId_operation: {
+          workflowRunId: "run-1",
+          operation: "ocr"
+        }
+      },
+      create: {
+        workflowRunId: "run-1",
+        operation: "ocr",
+        provider: "MISTRAL",
+        model: "mistral-ocr-latest",
+        pageCount: 3,
+        estimatedCostUsd: "0.012000",
+        rawUsage: { pagesProcessed: 3 }
+      },
+      update: {
+        provider: "MISTRAL",
+        model: "mistral-ocr-latest",
+        pageCount: 3,
+        estimatedCostUsd: "0.012000",
+        rawUsage: { pagesProcessed: 3 }
+      }
+    });
+  });
+
+  it("omits raw usage when no usage payload is available", () => {
+    const args = providerRunCostUpsertArgs({
+      workflowRunId: "run-1",
+      provider: "mistral",
+      model: "mistral-small-latest",
+      operation: "question_extraction",
+      inputTokenCount: 100,
+      outputTokenCount: 50,
+      estimatedCostUsd: "0.000045"
+    });
+
+    expect(args).toMatchObject({
+      create: {
+        workflowRunId: "run-1",
+        operation: "question_extraction",
+        provider: "mistral",
+        model: "mistral-small-latest",
+        inputTokenCount: 100,
+        outputTokenCount: 50,
+        estimatedCostUsd: "0.000045"
+      },
+      update: {
+        provider: "mistral",
+        model: "mistral-small-latest",
+        inputTokenCount: 100,
+        outputTokenCount: 50,
+        estimatedCostUsd: "0.000045"
+      }
+    });
+    expect(args.create).not.toHaveProperty("rawUsage");
+    expect(args.update).not.toHaveProperty("rawUsage");
   });
 });

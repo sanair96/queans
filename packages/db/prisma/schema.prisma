@@ -572,6 +572,7 @@ model ProviderRunCost {
   createdAt        DateTime    @default(now()) @map("created_at")
 
   @@index([workflowRunId, operation])
+  @@unique([workflowRunId, operation])
   @@map("provider_run_costs")
 }
 
