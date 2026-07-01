@@ -109,7 +109,7 @@ export async function createReviewItemsForCandidates(input: PaperIngestionWorkfl
           confidence: fieldConfidence.answer_text ?? 0,
           present: candidate.answerText !== null,
           required: true,
-          sourceBacked: true
+          sourceBacked: candidate.answerSourceBacked || candidate.answerSourceType === "SOURCE_KEY"
         },
         topic_id: {
           confidence: fieldConfidence.topic_id ?? fieldConfidence.topic ?? 0,
@@ -123,7 +123,9 @@ export async function createReviewItemsForCandidates(input: PaperIngestionWorkfl
         }
       },
       validationErrors: validationErrors(candidate.validationErrors),
-      mathOrDiagramUncertain: candidate.requiresDiagram && candidate.diagramAsset === null
+      mathOrDiagramUncertain: candidate.requiresDiagram && candidate.diagramAsset === null,
+      generatedAnswer: candidate.answerSourceType === "LLM_GENERATED",
+      generatedAnswerValidated: candidate.answerSourceBacked
     });
 
     if (result.decision === "AUTO_APPROVE") {
@@ -156,21 +158,29 @@ export async function createReviewItemsForCandidates(input: PaperIngestionWorkfl
       });
     }
 
-    await prisma.reviewItem.create({
-      data: {
+    const existingReviewItem = await prisma.reviewItem.findFirst({
+      where: {
         candidateId: candidate.id,
-        sourcePaperId: candidate.sourcePaperId,
-        reviewType: reviewTypeForReasons(result.reviewReasons),
-        severity: severityForReasons(result.reviewReasons),
-        reasonCodes: toInputJson(result.reviewReasons),
-        status: "OPEN",
-        reviewPayload: toInputJson({
-          fieldReviewReasons: result.fieldReviewReasons,
-          sourceEvidence: candidate.sourceEvidence
-        })
+        status: { in: ["OPEN", "ASSIGNED", "APPROVED", "EDITED", "REJECTED", "SKIPPED"] }
       }
     });
-    created += 1;
+    if (!existingReviewItem) {
+      await prisma.reviewItem.create({
+        data: {
+          candidateId: candidate.id,
+          sourcePaperId: candidate.sourcePaperId,
+          reviewType: reviewTypeForReasons(result.reviewReasons),
+          severity: severityForReasons(result.reviewReasons),
+          reasonCodes: toInputJson(result.reviewReasons),
+          status: "OPEN",
+          reviewPayload: toInputJson({
+            fieldReviewReasons: result.fieldReviewReasons,
+            sourceEvidence: candidate.sourceEvidence
+          })
+        }
+      });
+      created += 1;
+    }
   }
 
   return { reviewItemsCreated: created };
@@ -213,42 +223,22 @@ export async function applyReviewedItems(input: PaperIngestionWorkflowInput) {
   const reviewedItems = await prisma.reviewItem.findMany({
     where: {
       sourcePaperId: input.sourcePaperId,
-      status: { in: ["APPROVED", "EDITED", "REJECTED", "SKIPPED"] }
-    },
-    include: { candidate: true }
+      status: { in: ["APPROVED", "EDITED", "REJECTED", "SKIPPED"] },
+      appliedAt: null
+    }
   });
 
   for (const item of reviewedItems) {
-    if (item.status === "APPROVED") {
-      await prisma.questionCandidate.update({
+    await prisma.$transaction([
+      prisma.questionCandidate.update({
         where: { id: item.candidateId },
-        data: { reviewStatus: "APPROVED" }
-      });
-    }
-
-    if (item.status === "EDITED") {
-      await prisma.questionCandidate.update({
-        where: { id: item.candidateId },
-        data: {
-          ...candidatePatchFromReviewPayload(item.reviewPayload),
-          reviewStatus: "EDITED_AND_APPROVED"
-        }
-      });
-    }
-
-    if (item.status === "REJECTED") {
-      await prisma.questionCandidate.update({
-        where: { id: item.candidateId },
-        data: { reviewStatus: "REJECTED" }
-      });
-    }
-
-    if (item.status === "SKIPPED") {
-      await prisma.questionCandidate.update({
-        where: { id: item.candidateId },
-        data: { reviewStatus: "DUPLICATE" }
-      });
-    }
+        data: candidateUpdateForReviewedItem(item.status, item.reviewPayload)
+      }),
+      prisma.reviewItem.update({
+        where: { id: item.id },
+        data: { appliedAt: new Date() }
+      })
+    ]);
   }
 
   return { reviewedItemsApplied: reviewedItems.length };
@@ -288,8 +278,8 @@ export async function commitApprovedCandidates(input: PaperIngestionWorkflowInpu
             candidateId: candidate.id,
             answerText: candidate.answerText,
             solutionText: candidate.solutionText,
-            sourceType: candidate.reviewStatus === "EDITED_AND_APPROVED" ? "HUMAN_VERIFIED" : "LLM_GENERATED",
-            reviewStatus: candidate.reviewStatus === "EDITED_AND_APPROVED" ? "APPROVED" : "OPEN"
+            sourceType: candidate.answerSourceType,
+            reviewStatus: candidate.answerSourceType === "LLM_GENERATED" ? "OPEN" : "APPROVED"
           }
         });
       }
@@ -412,6 +402,30 @@ function severityForReasons(reasons: ReviewReasonCode[]) {
   return "LOW";
 }
 
+function candidateUpdateForReviewedItem(status: string, reviewPayload: Prisma.JsonValue): Prisma.QuestionCandidateUpdateInput {
+  switch (status) {
+    case "APPROVED":
+      return {
+        reviewStatus: "APPROVED",
+        answerSourceType: "HUMAN_VERIFIED",
+        answerSourceBacked: true
+      };
+    case "EDITED":
+      return {
+        ...candidatePatchFromReviewPayload(reviewPayload),
+        reviewStatus: "EDITED_AND_APPROVED",
+        answerSourceType: "HUMAN_VERIFIED",
+        answerSourceBacked: true
+      };
+    case "REJECTED":
+      return { reviewStatus: "REJECTED" };
+    case "SKIPPED":
+      return { reviewStatus: "DUPLICATE" };
+    default:
+      return {};
+  }
+}
+
 function candidatePatchFromReviewPayload(value: Prisma.JsonValue): Prisma.QuestionCandidateUpdateInput {
   if (!value || typeof value !== "object" || Array.isArray(value) || !("candidate" in value)) {
     return {};
@@ -431,6 +445,10 @@ function candidatePatchFromReviewPayload(value: Prisma.JsonValue): Prisma.Questi
   }
   if ("solutionText" in candidate && typeof candidate.solutionText === "string") {
     patch.solutionText = candidate.solutionText;
+  }
+  if ("answerSourceType" in candidate && candidate.answerSourceType === "SOURCE_KEY") {
+    patch.answerSourceType = candidate.answerSourceType;
+    patch.answerSourceBacked = true;
   }
   if ("difficulty" in candidate && typeof candidate.difficulty === "string") {
     patch.difficulty = candidate.difficulty;

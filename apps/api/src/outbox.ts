@@ -1,11 +1,36 @@
 import { prisma, WorkflowType } from "@queans/db";
+import type { Prisma } from "@queans/db";
 
 import type { ApiConfig } from "./config.js";
 import { startPaperIngestionWorkflow } from "./temporal.js";
 
-export async function dispatchPendingWorkflowStarts(config: ApiConfig, limit = 10) {
+export const WORKFLOW_DISPATCH_MAX_ATTEMPTS = 12;
+
+export function retryableWorkflowStartOutboxWhere(
+  maxAttempts = WORKFLOW_DISPATCH_MAX_ATTEMPTS
+): Prisma.WorkflowStartOutboxWhereInput {
+  return {
+    OR: [
+      { status: "PENDING" },
+      {
+        status: "FAILED",
+        attemptCount: { lt: maxAttempts }
+      }
+    ]
+  };
+}
+
+export function workflowDispatchFailureUpdate(error: unknown): Prisma.WorkflowStartOutboxUpdateInput {
+  return {
+    status: "FAILED",
+    attemptCount: { increment: 1 },
+    lastError: error instanceof Error ? error.message : "Unknown workflow dispatch error"
+  };
+}
+
+export async function dispatchPendingWorkflowStarts(config: ApiConfig, limit = 10, maxAttempts = WORKFLOW_DISPATCH_MAX_ATTEMPTS) {
   const pending = await prisma.workflowStartOutbox.findMany({
-    where: { status: "PENDING" },
+    where: retryableWorkflowStartOutboxWhere(maxAttempts),
     include: { workflowRun: true },
     orderBy: { createdAt: "asc" },
     take: limit
@@ -46,11 +71,7 @@ export async function dispatchPendingWorkflowStarts(config: ApiConfig, limit = 1
     } catch (error) {
       await prisma.workflowStartOutbox.update({
         where: { id: item.id },
-        data: {
-          status: "FAILED",
-          attemptCount: { increment: 1 },
-          lastError: error instanceof Error ? error.message : "Unknown workflow dispatch error"
-        }
+        data: workflowDispatchFailureUpdate(error)
       });
     }
   }
@@ -65,4 +86,3 @@ export function startOutboxDispatcher(config: ApiConfig) {
 
   return () => clearInterval(interval);
 }
-

@@ -46,6 +46,8 @@ export interface ExtractedQuestionCandidate {
   options?: unknown;
   answerText?: string | undefined;
   solutionText?: string | undefined;
+  answerSourceType: "SOURCE_KEY" | "LLM_GENERATED";
+  answerSourceBacked: boolean;
   chapter?: string | undefined;
   topic?: string | undefined;
   subtopic?: string | undefined;

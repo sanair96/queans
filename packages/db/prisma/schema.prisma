@@ -204,21 +204,21 @@ model SourcePaper {
 }
 
 model WorkflowRun {
-  id             String         @id @default(uuid())
-  workflowType   WorkflowType   @map("workflow_type")
-  entityId       String         @map("entity_id")
-  sourcePaperId  String?        @map("source_paper_id")
-  sourcePaper    SourcePaper?   @relation(fields: [sourcePaperId], references: [id])
-  temporalRunId  String?        @unique @map("temporal_run_id")
-  status         WorkflowStatus @default(PENDING)
-  currentStep    String?        @map("current_step")
-  inputPayload   Json           @map("input_payload")
-  outputPayload  Json?          @map("output_payload")
-  errorPayload   Json?          @map("error_payload")
-  createdBy      String?        @map("created_by")
-  createdAt      DateTime       @default(now()) @map("created_at")
-  updatedAt      DateTime       @updatedAt @map("updated_at")
-  completedAt    DateTime?      @map("completed_at")
+  id            String         @id @default(uuid())
+  workflowType  WorkflowType   @map("workflow_type")
+  entityId      String         @map("entity_id")
+  sourcePaperId String?        @map("source_paper_id")
+  sourcePaper   SourcePaper?   @relation(fields: [sourcePaperId], references: [id])
+  temporalRunId String?        @unique @map("temporal_run_id")
+  status        WorkflowStatus @default(PENDING)
+  currentStep   String?        @map("current_step")
+  inputPayload  Json           @map("input_payload")
+  outputPayload Json?          @map("output_payload")
+  errorPayload  Json?          @map("error_payload")
+  createdBy     String?        @map("created_by")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  completedAt   DateTime?      @map("completed_at")
 
   steps            WorkflowStep[]
   events           WorkflowEvent[]
@@ -299,16 +299,16 @@ model OcrPage {
 }
 
 model OcrBlock {
-  id           String   @id @default(uuid())
-  ocrPageId    String   @map("ocr_page_id")
-  ocrPage      OcrPage  @relation(fields: [ocrPageId], references: [id], onDelete: Cascade)
-  blockType    String   @map("block_type")
-  text         String
-  confidence   Float?
-  boundingBox  Json?    @map("bounding_box")
-  sourceAsset  Json?    @map("source_asset")
-  rawJson      Json?    @map("raw_json")
-  createdAt    DateTime @default(now()) @map("created_at")
+  id          String   @id @default(uuid())
+  ocrPageId   String   @map("ocr_page_id")
+  ocrPage     OcrPage  @relation(fields: [ocrPageId], references: [id], onDelete: Cascade)
+  blockType   String   @map("block_type")
+  text        String
+  confidence  Float?
+  boundingBox Json?    @map("bounding_box")
+  sourceAsset Json?    @map("source_asset")
+  rawJson     Json?    @map("raw_json")
+  createdAt   DateTime @default(now()) @map("created_at")
 
   @@index([ocrPageId, blockType])
   @@map("ocr_blocks")
@@ -328,8 +328,8 @@ model Chapter {
 }
 
 model Topic {
-  id        String  @id @default(uuid())
-  chapterId String? @map("chapter_id")
+  id        String   @id @default(uuid())
+  chapterId String?  @map("chapter_id")
   chapter   Chapter? @relation(fields: [chapterId], references: [id])
   name      String
   createdAt DateTime @default(now()) @map("created_at")
@@ -357,41 +357,43 @@ model Subtopic {
 }
 
 model QuestionCandidate {
-  id                  String          @id @default(uuid())
-  sourcePaperId       String          @map("source_paper_id")
-  sourcePaper         SourcePaper     @relation(fields: [sourcePaperId], references: [id], onDelete: Cascade)
-  approvedQuestionId  String?         @unique @map("approved_question_id")
-  approvedQuestion    Question?       @relation("ApprovedCandidateQuestion", fields: [approvedQuestionId], references: [id])
-  pageNumber          Int?            @map("page_number")
-  sourcePageStart     Int?            @map("source_page_start")
-  sourcePageEnd       Int?            @map("source_page_end")
-  questionNumber      String?         @map("question_number")
-  sectionName         String?         @map("section_name")
-  rawOcrText          String          @map("raw_ocr_text")
-  cleanedQuestionText String          @map("cleaned_question_text")
-  questionType        QuestionType    @default(UNKNOWN) @map("question_type")
+  id                  String           @id @default(uuid())
+  sourcePaperId       String           @map("source_paper_id")
+  sourcePaper         SourcePaper      @relation(fields: [sourcePaperId], references: [id], onDelete: Cascade)
+  approvedQuestionId  String?          @unique @map("approved_question_id")
+  approvedQuestion    Question?        @relation("ApprovedCandidateQuestion", fields: [approvedQuestionId], references: [id])
+  pageNumber          Int?             @map("page_number")
+  sourcePageStart     Int?             @map("source_page_start")
+  sourcePageEnd       Int?             @map("source_page_end")
+  questionNumber      String?          @map("question_number")
+  sectionName         String?          @map("section_name")
+  rawOcrText          String           @map("raw_ocr_text")
+  cleanedQuestionText String           @map("cleaned_question_text")
+  questionType        QuestionType     @default(UNKNOWN) @map("question_type")
   marks               Float?
   options             Json?
-  answerText          String?         @map("answer_text")
-  solutionText        String?         @map("solution_text")
-  chapterId           String?         @map("chapter_id")
-  chapter             Chapter?        @relation(fields: [chapterId], references: [id])
-  topicId             String?         @map("topic_id")
-  topic               Topic?          @relation(fields: [topicId], references: [id])
-  subtopicId          String?         @map("subtopic_id")
-  subtopic            Subtopic?       @relation(fields: [subtopicId], references: [id])
+  answerText          String?          @map("answer_text")
+  solutionText        String?          @map("solution_text")
+  answerSourceType    AnswerSourceType @default(LLM_GENERATED) @map("answer_source_type")
+  answerSourceBacked  Boolean          @default(false) @map("answer_source_backed")
+  chapterId           String?          @map("chapter_id")
+  chapter             Chapter?         @relation(fields: [chapterId], references: [id])
+  topicId             String?          @map("topic_id")
+  topic               Topic?           @relation(fields: [topicId], references: [id])
+  subtopicId          String?          @map("subtopic_id")
+  subtopic            Subtopic?        @relation(fields: [subtopicId], references: [id])
   difficulty          String?
-  bloomLevel          String?         @map("bloom_level")
-  requiresDiagram     Boolean         @default(false) @map("requires_diagram")
-  diagramAsset        Json?           @map("diagram_asset")
-  extractedPayload    Json            @map("extracted_payload")
-  sourceEvidence      Json            @map("source_evidence")
-  fieldConfidence     Json            @map("field_confidence")
-  overallConfidence   Float           @map("overall_confidence")
-  validationErrors    Json            @map("validation_errors")
-  reviewStatus        CandidateStatus @default(EXTRACTED) @map("review_status")
-  createdAt           DateTime        @default(now()) @map("created_at")
-  updatedAt           DateTime        @updatedAt @map("updated_at")
+  bloomLevel          String?          @map("bloom_level")
+  requiresDiagram     Boolean          @default(false) @map("requires_diagram")
+  diagramAsset        Json?            @map("diagram_asset")
+  extractedPayload    Json             @map("extracted_payload")
+  sourceEvidence      Json             @map("source_evidence")
+  fieldConfidence     Json             @map("field_confidence")
+  overallConfidence   Float            @map("overall_confidence")
+  validationErrors    Json             @map("validation_errors")
+  reviewStatus        CandidateStatus  @default(EXTRACTED) @map("review_status")
+  createdAt           DateTime         @default(now()) @map("created_at")
+  updatedAt           DateTime         @updatedAt @map("updated_at")
 
   answers          Answer[]
   duplicateMatches DuplicateMatch[]
@@ -405,13 +407,13 @@ model QuestionCandidate {
 }
 
 model CandidateFieldConfidence {
-  id         String            @id @default(uuid())
-  candidateId String           @map("candidate_id")
-  candidate  QuestionCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
-  fieldName  String            @map("field_name")
-  confidence Float
-  reasonCode ReviewReason?     @map("reason_code")
-  createdAt  DateTime          @default(now()) @map("created_at")
+  id          String            @id @default(uuid())
+  candidateId String            @map("candidate_id")
+  candidate   QuestionCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  fieldName   String            @map("field_name")
+  confidence  Float
+  reasonCode  ReviewReason?     @map("reason_code")
+  createdAt   DateTime          @default(now()) @map("created_at")
 
   @@unique([candidateId, fieldName])
   @@map("candidate_field_confidences")
@@ -455,52 +457,54 @@ model ReviewItem {
   decision      ReviewDecision?
   createdAt     DateTime          @default(now()) @map("created_at")
   reviewedAt    DateTime?         @map("reviewed_at")
+  appliedAt     DateTime?         @map("applied_at")
 
   corrections ReviewCorrection[]
 
   @@index([sourcePaperId, status])
   @@index([candidateId, status])
+  @@index([sourcePaperId, appliedAt])
   @@map("review_items")
 }
 
 model ReviewCorrection {
-  id             String          @id @default(uuid())
-  reviewItemId   String          @map("review_item_id")
-  reviewItem     ReviewItem      @relation(fields: [reviewItemId], references: [id], onDelete: Cascade)
-  fieldName      String          @map("field_name")
-  oldValue       Json?           @map("old_value")
-  newValue       Json?           @map("new_value")
-  correctionType CorrectionType  @map("correction_type")
-  reviewerId     String?         @map("reviewer_id")
-  createdAt      DateTime        @default(now()) @map("created_at")
+  id             String         @id @default(uuid())
+  reviewItemId   String         @map("review_item_id")
+  reviewItem     ReviewItem     @relation(fields: [reviewItemId], references: [id], onDelete: Cascade)
+  fieldName      String         @map("field_name")
+  oldValue       Json?          @map("old_value")
+  newValue       Json?          @map("new_value")
+  correctionType CorrectionType @map("correction_type")
+  reviewerId     String?        @map("reviewer_id")
+  createdAt      DateTime       @default(now()) @map("created_at")
 
   @@index([reviewItemId, fieldName])
   @@map("review_corrections")
 }
 
 model Question {
-  id                String              @id @default(uuid())
-  sourceCandidate   QuestionCandidate?  @relation("ApprovedCandidateQuestion")
-  questionText      String              @map("question_text")
-  questionType      QuestionType        @map("question_type")
-  marks             Float?
-  options           Json?
-  chapterId         String?             @map("chapter_id")
-  chapter           Chapter?            @relation(fields: [chapterId], references: [id])
-  topicId           String?             @map("topic_id")
-  topic             Topic?              @relation(fields: [topicId], references: [id])
-  subtopicId        String?             @map("subtopic_id")
-  subtopic          Subtopic?           @relation(fields: [subtopicId], references: [id])
-  difficulty        String?
-  bloomLevel        String?             @map("bloom_level")
-  status            QuestionStatus      @default(APPROVED)
-  sourceEvidence    Json                @map("source_evidence")
-  createdAt         DateTime            @default(now()) @map("created_at")
-  updatedAt         DateTime            @updatedAt @map("updated_at")
-  archivedAt        DateTime?           @map("archived_at")
+  id              String             @id @default(uuid())
+  sourceCandidate QuestionCandidate? @relation("ApprovedCandidateQuestion")
+  questionText    String             @map("question_text")
+  questionType    QuestionType       @map("question_type")
+  marks           Float?
+  options         Json?
+  chapterId       String?            @map("chapter_id")
+  chapter         Chapter?           @relation(fields: [chapterId], references: [id])
+  topicId         String?            @map("topic_id")
+  topic           Topic?             @relation(fields: [topicId], references: [id])
+  subtopicId      String?            @map("subtopic_id")
+  subtopic        Subtopic?          @relation(fields: [subtopicId], references: [id])
+  difficulty      String?
+  bloomLevel      String?            @map("bloom_level")
+  status          QuestionStatus     @default(APPROVED)
+  sourceEvidence  Json               @map("source_evidence")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+  archivedAt      DateTime?          @map("archived_at")
 
-  answers          Answer[]
-  duplicateMatches DuplicateMatch[]
+  answers             Answer[]
+  duplicateMatches    DuplicateMatch[]
   generatedPaperItems GeneratedPaperItem[]
 
   @@index([status, createdAt])
@@ -509,17 +513,17 @@ model Question {
 }
 
 model Answer {
-  id              String             @id @default(uuid())
-  questionId      String?            @map("question_id")
-  question        Question?          @relation(fields: [questionId], references: [id])
-  candidateId     String?            @map("candidate_id")
-  candidate       QuestionCandidate? @relation(fields: [candidateId], references: [id])
-  answerText      String             @map("answer_text")
-  solutionText    String?            @map("solution_text")
-  sourceType      AnswerSourceType   @map("source_type")
-  reviewStatus    ReviewStatus       @default(OPEN) @map("review_status")
-  createdAt       DateTime           @default(now()) @map("created_at")
-  updatedAt       DateTime           @updatedAt @map("updated_at")
+  id           String             @id @default(uuid())
+  questionId   String?            @map("question_id")
+  question     Question?          @relation(fields: [questionId], references: [id])
+  candidateId  String?            @map("candidate_id")
+  candidate    QuestionCandidate? @relation(fields: [candidateId], references: [id])
+  answerText   String             @map("answer_text")
+  solutionText String?            @map("solution_text")
+  sourceType   AnswerSourceType   @map("source_type")
+  reviewStatus ReviewStatus       @default(OPEN) @map("review_status")
+  createdAt    DateTime           @default(now()) @map("created_at")
+  updatedAt    DateTime           @updatedAt @map("updated_at")
 
   @@index([questionId, reviewStatus])
   @@index([candidateId])
@@ -527,15 +531,15 @@ model Answer {
 }
 
 model DuplicateMatch {
-  id             String             @id @default(uuid())
-  candidateId    String             @map("candidate_id")
-  candidate      QuestionCandidate  @relation(fields: [candidateId], references: [id], onDelete: Cascade)
-  questionId     String?            @map("question_id")
-  question       Question?          @relation(fields: [questionId], references: [id])
-  similarity     Float
-  conflict       Boolean            @default(false)
-  details        Json?
-  createdAt      DateTime           @default(now()) @map("created_at")
+  id          String            @id @default(uuid())
+  candidateId String            @map("candidate_id")
+  candidate   QuestionCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  questionId  String?           @map("question_id")
+  question    Question?         @relation(fields: [questionId], references: [id])
+  similarity  Float
+  conflict    Boolean           @default(false)
+  details     Json?
+  createdAt   DateTime          @default(now()) @map("created_at")
 
   @@index([candidateId, conflict])
   @@index([questionId])
@@ -561,17 +565,17 @@ model ProviderRunCost {
 }
 
 model GeneratedPaper {
-  id             String               @id @default(uuid())
-  workflowRunId  String?              @map("workflow_run_id")
-  title          String
-  requestedSchema Json                @map("requested_schema")
-  actualSchema   Json?                @map("actual_schema")
-  warnings       Json?
-  status         GeneratedPaperStatus @default(DRAFT)
-  renderedObjectKey String?           @map("rendered_object_key")
-  solutionObjectKey String?           @map("solution_object_key")
-  createdAt      DateTime             @default(now()) @map("created_at")
-  updatedAt      DateTime             @updatedAt @map("updated_at")
+  id                String               @id @default(uuid())
+  workflowRunId     String?              @map("workflow_run_id")
+  title             String
+  requestedSchema   Json                 @map("requested_schema")
+  actualSchema      Json?                @map("actual_schema")
+  warnings          Json?
+  status            GeneratedPaperStatus @default(DRAFT)
+  renderedObjectKey String?              @map("rendered_object_key")
+  solutionObjectKey String?              @map("solution_object_key")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
 
   items GeneratedPaperItem[]
 
@@ -583,14 +587,13 @@ model GeneratedPaperItem {
   id               String         @id @default(uuid())
   generatedPaperId String         @map("generated_paper_id")
   generatedPaper   GeneratedPaper @relation(fields: [generatedPaperId], references: [id], onDelete: Cascade)
-  questionId        String         @map("question_id")
-  question          Question       @relation(fields: [questionId], references: [id])
-  position          Int
-  marks             Float?
-  sectionName       String?        @map("section_name")
-  createdAt         DateTime       @default(now()) @map("created_at")
+  questionId       String         @map("question_id")
+  question         Question       @relation(fields: [questionId], references: [id])
+  position         Int
+  marks            Float?
+  sectionName      String?        @map("section_name")
+  createdAt        DateTime       @default(now()) @map("created_at")
 
   @@unique([generatedPaperId, position])
   @@map("generated_paper_items")
 }
-

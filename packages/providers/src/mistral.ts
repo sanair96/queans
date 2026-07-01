@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { OcrPage, OcrResult, QuestionExtractionResult } from "./types.js";
+import type { ExtractedQuestionCandidate, OcrPage, OcrResult, QuestionExtractionResult } from "./types.js";
 
 export interface MistralConfig {
   apiKey: string;
@@ -61,6 +61,8 @@ const extractionCandidateSchema = z.object({
   options: z.unknown().optional(),
   answer_text: z.string().optional(),
   solution_text: z.string().optional(),
+  answer_source_type: z.enum(["SOURCE_KEY", "LLM_GENERATED"]).default("LLM_GENERATED"),
+  answer_source_backed: z.boolean().default(false),
   chapter: z.string().optional(),
   topic: z.string().optional(),
   subtopic: z.string().optional(),
@@ -135,7 +137,7 @@ export class MistralQuestionExtractor {
         {
           role: "system",
           content:
-            "Extract question candidates from OCR markdown. Return only JSON matching {\"candidates\": [...]}. Include field_confidence, validation_errors, source_evidence, and whether diagrams are required. Do not hide uncertainty."
+            "Extract question candidates from OCR markdown. Return only JSON matching {\"candidates\": [...]}. Include field_confidence, validation_errors, source_evidence, answer_source_type, answer_source_backed, and whether diagrams are required. Use answer_source_type=SOURCE_KEY only when the answer is directly present in the OCR source; otherwise use LLM_GENERATED and do not hide uncertainty."
         },
         {
           role: "user",
@@ -148,35 +150,10 @@ export class MistralQuestionExtractor {
     if (!firstChoice) {
       throw new Error("Mistral extraction returned no choices");
     }
-    const extracted = extractionResponseSchema.parse(JSON.parse(firstChoice.message.content));
     return {
       provider: "mistral",
       model: this.config.extractorModel,
-      candidates: extracted.candidates.map((candidate) => ({
-        questionNumber: candidate.question_number,
-        sectionName: candidate.section_name,
-        pageNumber: candidate.page_number,
-        sourcePageStart: candidate.source_page_start,
-        sourcePageEnd: candidate.source_page_end,
-        rawOcrText: candidate.raw_ocr_text,
-        cleanedQuestionText: candidate.cleaned_question_text,
-        questionType: candidate.question_type,
-        marks: candidate.marks,
-        options: candidate.options,
-        answerText: candidate.answer_text,
-        solutionText: candidate.solution_text,
-        chapter: candidate.chapter,
-        topic: candidate.topic,
-        subtopic: candidate.subtopic,
-        difficulty: candidate.difficulty,
-        bloomLevel: candidate.bloom_level,
-        requiresDiagram: candidate.requires_diagram,
-        diagramAsset: candidate.diagram_asset,
-        fieldConfidence: candidate.field_confidence,
-        overallConfidence: candidate.overall_confidence,
-        validationErrors: candidate.validation_errors.filter(isKnownReviewReason),
-        sourceEvidence: candidate.source_evidence
-      })),
+      candidates: parseMistralExtractionContent(firstChoice.message.content),
       rawJson: raw,
       usage: {
         promptTokens: completion.usage?.prompt_tokens,
@@ -185,6 +162,37 @@ export class MistralQuestionExtractor {
       }
     };
   }
+}
+
+export function parseMistralExtractionContent(content: string): ExtractedQuestionCandidate[] {
+  const extracted = extractionResponseSchema.parse(JSON.parse(content));
+  return extracted.candidates.map((candidate) => ({
+    questionNumber: candidate.question_number,
+    sectionName: candidate.section_name,
+    pageNumber: candidate.page_number,
+    sourcePageStart: candidate.source_page_start,
+    sourcePageEnd: candidate.source_page_end,
+    rawOcrText: candidate.raw_ocr_text,
+    cleanedQuestionText: candidate.cleaned_question_text,
+    questionType: candidate.question_type,
+    marks: candidate.marks,
+    options: candidate.options,
+    answerText: candidate.answer_text,
+    solutionText: candidate.solution_text,
+    answerSourceType: candidate.answer_source_type,
+    answerSourceBacked: candidate.answer_source_backed,
+    chapter: candidate.chapter,
+    topic: candidate.topic,
+    subtopic: candidate.subtopic,
+    difficulty: candidate.difficulty,
+    bloomLevel: candidate.bloom_level,
+    requiresDiagram: candidate.requires_diagram,
+    diagramAsset: candidate.diagram_asset,
+    fieldConfidence: candidate.field_confidence,
+    overallConfidence: candidate.overall_confidence,
+    validationErrors: candidate.validation_errors.filter(isKnownReviewReason),
+    sourceEvidence: candidate.source_evidence
+  }));
 }
 
 function normalizeMistralPage(page: z.infer<typeof mistralOcrPageSchema>): OcrPage {
@@ -268,4 +276,3 @@ function isKnownReviewReason(reason: string): reason is QuestionExtractionResult
     "LOW_TOPIC_CONFIDENCE"
   ].includes(reason);
 }
-

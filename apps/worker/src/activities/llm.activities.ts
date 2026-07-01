@@ -48,6 +48,8 @@ export async function extractQuestionsAndPersist(input: PaperIngestionWorkflowIn
           options: candidate.options === undefined ? Prisma.JsonNull : toInputJson(candidate.options),
           answerText: candidate.answerText ?? null,
           solutionText: candidate.solutionText ?? null,
+          answerSourceType: candidate.answerSourceType,
+          answerSourceBacked: candidate.answerSourceBacked,
           difficulty: candidate.difficulty ?? null,
           bloomLevel: candidate.bloomLevel ?? null,
           requiresDiagram: candidate.requiresDiagram,

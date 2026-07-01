@@ -1,4 +1,10 @@
-import { Client, Connection } from "@temporalio/client";
+import {
+  Client,
+  Connection,
+  WorkflowExecutionAlreadyStartedError,
+  WorkflowIdConflictPolicy,
+  WorkflowIdReusePolicy
+} from "@temporalio/client";
 
 import { paperIngestionWorkflowId, PAPER_INGESTION_WORKFLOW_TYPE } from "@queans/core";
 
@@ -28,11 +34,20 @@ export async function startPaperIngestionWorkflow(
 ) {
   const client = await getTemporalClient(config);
   const workflowId = paperIngestionWorkflowId(input.ingestionRunId);
-  await client.workflow.start(PAPER_INGESTION_WORKFLOW_TYPE, {
-    taskQueue: config.TEMPORAL_TASK_QUEUE_PAPER_INGESTION,
-    workflowId,
-    args: [input]
-  });
+  try {
+    await client.workflow.start(PAPER_INGESTION_WORKFLOW_TYPE, {
+      taskQueue: config.TEMPORAL_TASK_QUEUE_PAPER_INGESTION,
+      workflowId,
+      workflowIdConflictPolicy: WorkflowIdConflictPolicy.USE_EXISTING,
+      workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
+      args: [input]
+    });
+  } catch (error) {
+    if (error instanceof WorkflowExecutionAlreadyStartedError) {
+      return workflowId;
+    }
+    throw error;
+  }
   return workflowId;
 }
 
@@ -51,4 +66,3 @@ export async function signalHumanReviewCompleted(
     reviewedBy: input.reviewedBy
   });
 }
-

@@ -51,7 +51,7 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
     const input = uploadCompleteSchema.parse(request.body);
     const upload = await prisma.uploadObject.findUnique({
       where: { id: request.params.id },
-      include: { sourcePaper: { include: { workflowRuns: true } } }
+      include: { sourcePaper: { include: { workflowRuns: { orderBy: { createdAt: "desc" }, take: 1 } } } }
     });
 
     if (!upload) {
@@ -59,7 +59,7 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
     }
 
     if (upload.status === "COMPLETED" && upload.sourcePaper) {
-      const latestRun = upload.sourcePaper.workflowRuns.at(-1);
+      const latestRun = upload.sourcePaper.workflowRuns[0];
       return reply.send({
         sourcePaperId: upload.sourcePaper.id,
         ingestionRunId: latestRun?.id,
