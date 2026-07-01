@@ -50,4 +50,25 @@ describe("parseMistralExtractionContent", () => {
     expect(candidate?.answerSourceType).toBe("LLM_GENERATED");
     expect(candidate?.answerSourceBacked).toBe(false);
   });
+
+  it("preserves extracted taxonomy labels", () => {
+    const [candidate] = parseMistralExtractionContent(
+      JSON.stringify({
+        candidates: [
+          {
+            ...baseCandidate,
+            chapter: "Algebra",
+            topic: "Linear Equations",
+            subtopic: "Pair of Linear Equations"
+          }
+        ]
+      })
+    );
+
+    expect(candidate).toMatchObject({
+      chapter: "Algebra",
+      topic: "Linear Equations",
+      subtopic: "Pair of Linear Equations"
+    });
+  });
 });

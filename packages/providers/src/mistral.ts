@@ -137,7 +137,7 @@ export class MistralQuestionExtractor {
         {
           role: "system",
           content:
-            "Extract question candidates from OCR markdown. Return only JSON matching {\"candidates\": [...]}. Include field_confidence, validation_errors, source_evidence, answer_source_type, answer_source_backed, and whether diagrams are required. Use answer_source_type=SOURCE_KEY only when the answer is directly present in the OCR source; otherwise use LLM_GENERATED and do not hide uncertainty."
+            "Extract question candidates from OCR markdown. Return only JSON matching {\"candidates\": [...]}. Include chapter, topic, subtopic, field_confidence, validation_errors, source_evidence, answer_source_type, answer_source_backed, and whether diagrams are required. Use answer_source_type=SOURCE_KEY only when the answer is directly present in the OCR source; otherwise use LLM_GENERATED and do not hide uncertainty."
         },
         {
           role: "user",
