@@ -1,4 +1,5 @@
 import { apiGet } from "../api-client";
+import { ReviewWorkbench } from "./review-workbench";
 
 interface ReviewItem {
   id: string;
@@ -7,11 +8,23 @@ interface ReviewItem {
   reasonCodes: unknown;
   status: string;
   createdAt: string;
+  reviewPayload: unknown;
+  sourcePaper: {
+    sourceFileName: string;
+  };
   candidate: {
+    id: string;
+    questionNumber: string | null;
+    questionType: string;
+    rawOcrText: string;
     cleanedQuestionText: string;
     answerText: string | null;
+    solutionText: string | null;
+    difficulty: string | null;
     marks: number | null;
     overallConfidence: number;
+    fieldConfidence: unknown;
+    sourceEvidence: unknown;
   };
 }
 
@@ -24,39 +37,9 @@ export default async function ReviewPage() {
         <div>
           <p className="eyebrow">Human review</p>
           <h1>Open review queue</h1>
-          <p className="muted">Review tasks include source evidence, reason codes, confidence, and editable extracted fields.</p>
         </div>
       </header>
-      <section className="panel">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Severity</th>
-              <th>Question</th>
-              <th>Type</th>
-              <th>Confidence</th>
-              <th>Reasons</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.reviewItems.map((item) => (
-              <tr key={item.id}>
-                <td><span className={`badge ${item.severity.toLowerCase()}`}>{item.severity}</span></td>
-                <td>{item.candidate.cleanedQuestionText}</td>
-                <td>{item.reviewType}</td>
-                <td>{Math.round(item.candidate.overallConfidence * 100)}%</td>
-                <td><code>{JSON.stringify(item.reasonCodes)}</code></td>
-              </tr>
-            ))}
-            {data.reviewItems.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="muted">No open review items.</td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </section>
+      <ReviewWorkbench initialItems={data.reviewItems} />
     </>
   );
 }
-
