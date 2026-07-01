@@ -1,11 +1,12 @@
 import {
   evaluateCandidateConfidence,
+  type CandidateDecision,
   type PaperIngestionStep,
   type PaperIngestionWorkflowInput,
   type ReviewReasonCode,
   type WorkflowFailurePayload
 } from "@queans/core";
-import { prisma, Prisma } from "@queans/db";
+import { CandidateStatus, prisma, Prisma } from "@queans/db";
 
 import {
   duplicateMatchThreshold,
@@ -200,6 +201,7 @@ export async function createReviewItemsForCandidates(input: PaperIngestionWorkfl
   ]);
 
   let created = 0;
+  let optionalFieldReviewsRecorded = 0;
   for (const candidate of candidates) {
     const fieldConfidence = confidenceRecord(candidate.fieldConfidence);
     const result = evaluateCandidateConfidence({
@@ -247,34 +249,25 @@ export async function createReviewItemsForCandidates(input: PaperIngestionWorkfl
       generatedAnswerValidated: candidate.answerSourceBacked
     });
 
-    if (result.decision === "AUTO_APPROVE") {
-      await prisma.questionCandidate.update({
-        where: { id: candidate.id },
-        data: {
-          reviewStatus: "APPROVED",
-          overallConfidence: result.overallConfidence
-        }
-      });
-      continue;
+    const gate = reviewGateForConfidenceDecision(result.decision);
+    const candidateUpdate: Prisma.QuestionCandidateUpdateInput = {
+      reviewStatus: gate.candidateStatus,
+      overallConfidence: result.overallConfidence
+    };
+    if (gate.recordReviewReasons) {
+      candidateUpdate.validationErrors = toInputJson(result.reviewReasons);
     }
 
-    if (result.decision === "APPROVE_WITH_FIELD_REVIEW") {
-      await prisma.questionCandidate.update({
-        where: { id: candidate.id },
-        data: {
-          reviewStatus: "APPROVED",
-          overallConfidence: result.overallConfidence
-        }
-      });
-    } else {
-      await prisma.questionCandidate.update({
-        where: { id: candidate.id },
-        data: {
-          reviewStatus: "NEEDS_REVIEW",
-          overallConfidence: result.overallConfidence,
-          validationErrors: toInputJson(result.reviewReasons)
-        }
-      });
+    await prisma.questionCandidate.update({
+      where: { id: candidate.id },
+      data: candidateUpdate
+    });
+
+    if (!gate.createReviewItem) {
+      if (result.decision === "APPROVE_WITH_FIELD_REVIEW") {
+        optionalFieldReviewsRecorded += 1;
+      }
+      continue;
     }
 
     const existingReviewItem = await prisma.reviewItem.findFirst({
@@ -303,7 +296,36 @@ export async function createReviewItemsForCandidates(input: PaperIngestionWorkfl
     }
   }
 
-  return { reviewItemsCreated: created };
+  return { reviewItemsCreated: created, optionalFieldReviewsRecorded };
+}
+
+export function reviewGateForConfidenceDecision(decision: CandidateDecision) {
+  switch (decision) {
+    case "AUTO_APPROVE":
+      return {
+        candidateStatus: CandidateStatus.APPROVED,
+        createReviewItem: false,
+        recordReviewReasons: false
+      };
+    case "APPROVE_WITH_FIELD_REVIEW":
+      return {
+        candidateStatus: CandidateStatus.APPROVED,
+        createReviewItem: false,
+        recordReviewReasons: true
+      };
+    case "NEEDS_REVIEW":
+      return {
+        candidateStatus: CandidateStatus.NEEDS_REVIEW,
+        createReviewItem: true,
+        recordReviewReasons: true
+      };
+    case "REJECT":
+      return {
+        candidateStatus: CandidateStatus.REJECTED,
+        createReviewItem: false,
+        recordReviewReasons: true
+      };
+  }
 }
 
 export async function hasOpenReviewItems(input: PaperIngestionWorkflowInput) {
