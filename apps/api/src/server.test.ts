@@ -108,4 +108,29 @@ describe("buildServer", () => {
       await app.close();
     }
   });
+
+  it("rejects unsupported review split decisions before loading review items", async () => {
+    const app = await buildServer(apiConfig);
+    try {
+      const response = await app.inject({
+        method: "PATCH",
+        url: "/api/review/tasks/review-item-1",
+        payload: {
+          decision: "SPLIT"
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({
+        error: "VALIDATION_ERROR",
+        issues: [
+          {
+            path: ["decision"]
+          }
+        ]
+      });
+    } finally {
+      await app.close();
+    }
+  });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { maxUploadByteSize, uploadCompleteSchema, uploadInitSchema } from "./schemas.js";
+import { maxUploadByteSize, reviewPatchSchema, uploadCompleteSchema, uploadInitSchema } from "./schemas.js";
 
 describe("uploadCompleteSchema", () => {
   it("accepts paper context used to classify ingested source papers", () => {
@@ -70,5 +70,25 @@ describe("uploadInitSchema", () => {
         byteSize: maxUploadByteSize + 1
       })
     ).toThrow("Uploads must be 50 MB or smaller for OCR processing.");
+  });
+});
+
+describe("reviewPatchSchema", () => {
+  it("accepts review decisions that are implemented by the ingestion workflow", () => {
+    for (const decision of [
+      "APPROVE",
+      "EDIT_AND_APPROVE",
+      "REJECT",
+      "MARK_DUPLICATE",
+      "NEEDS_MORE_INFO",
+      "MARK_UNPROCESSABLE"
+    ]) {
+      expect(reviewPatchSchema.parse({ decision })).toEqual({ decision });
+    }
+  });
+
+  it("rejects split and merge until candidate rewrite semantics are implemented", () => {
+    expect(() => reviewPatchSchema.parse({ decision: "SPLIT" })).toThrow();
+    expect(() => reviewPatchSchema.parse({ decision: "MERGE" })).toThrow();
   });
 });

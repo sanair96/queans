@@ -5,7 +5,7 @@
   "packageManager": "pnpm@11.7.0",
   "scripts": {
     "build": "pnpm -r build",
-    "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "check": "pnpm build && pnpm typecheck && pnpm lint && pnpm test",
     "db:generate": "pnpm --filter @queans/db db:generate",
     "db:migrate": "pnpm --filter @queans/db db:migrate",
     "dev": "pnpm --parallel --filter @queans/api --filter @queans/web --filter @queans/worker dev",

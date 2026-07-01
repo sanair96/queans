@@ -39,8 +39,6 @@ export const reviewPatchSchema = z.object({
     "APPROVE",
     "EDIT_AND_APPROVE",
     "REJECT",
-    "SPLIT",
-    "MERGE",
     "MARK_DUPLICATE",
     "NEEDS_MORE_INFO",
     "MARK_UNPROCESSABLE"

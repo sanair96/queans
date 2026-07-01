@@ -436,8 +436,6 @@ function reviewStatusForDecision(decision: string) {
     case "APPROVE":
       return "APPROVED";
     case "EDIT_AND_APPROVE":
-    case "SPLIT":
-    case "MERGE":
       return "EDITED";
     case "REJECT":
     case "MARK_UNPROCESSABLE":
