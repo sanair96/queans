@@ -12,6 +12,7 @@ import {
 import type * as appActivities from "../activities/app.activities.js";
 import type * as llmActivities from "../activities/llm.activities.js";
 import type * as ocrActivities from "../activities/ocr.activities.js";
+import { shouldWaitForHumanReviewSignal } from "./review-wait.js";
 
 const app = proxyActivities<typeof appActivities>({
   startToCloseTimeout: "1 minute",
@@ -71,10 +72,19 @@ export async function PaperIngestionWorkflow(input: PaperIngestionWorkflowInput)
     await app.recordStepSucceeded(input, "validate_candidates", reviewSummary);
 
     while (await app.hasOpenReviewItems(input)) {
-      const previousSignalCount = reviewSignalCount;
       currentStep = "wait_for_review";
       await app.markWaitingForReview(input);
-      await condition(() => reviewSignalCount > previousSignalCount);
+      const previousSignalCount = reviewSignalCount;
+      const reviewStillOpen = await app.hasOpenReviewItems(input);
+      if (
+        shouldWaitForHumanReviewSignal({
+          reviewStillOpen,
+          previousSignalCount,
+          currentSignalCount: reviewSignalCount
+        })
+      ) {
+        await condition(() => reviewSignalCount > previousSignalCount);
+      }
       currentStep = "apply_human_corrections";
       await app.recordStepStarted(input, "apply_human_corrections");
       await app.applyReviewedItems(input);
