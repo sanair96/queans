@@ -80,4 +80,32 @@ describe("buildServer", () => {
       await app.close();
     }
   });
+
+  it("returns request validation errors before checking R2 configuration", async () => {
+    const app = await buildServer(apiConfig);
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/uploads/init",
+        payload: {
+          fileName: "paper.png",
+          mimeType: "image/png",
+          byteSize: 1024
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({
+        error: "VALIDATION_ERROR",
+        issues: [
+          {
+            path: ["mimeType"],
+            message: "Only PDF uploads are supported by the current OCR pipeline."
+          }
+        ]
+      });
+    } finally {
+      await app.close();
+    }
+  });
 });

@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+export const maxUploadByteSize = 50 * 1024 * 1024;
+export const supportedUploadMimeTypes = ["application/pdf"] as const;
+
 export const paperContextSchema = z.object({
   title: z.string().trim().min(1).optional(),
   board: z.string().trim().min(1).optional(),
@@ -14,8 +17,14 @@ export const paperContextSchema = z.object({
 
 export const uploadInitSchema = z.object({
   fileName: z.string().min(1),
-  mimeType: z.string().min(1),
-  byteSize: z.number().int().positive(),
+  mimeType: z.enum(supportedUploadMimeTypes, {
+    errorMap: () => ({ message: "Only PDF uploads are supported by the current OCR pipeline." })
+  }),
+  byteSize: z
+    .number()
+    .int()
+    .positive()
+    .max(maxUploadByteSize, "Uploads must be 50 MB or smaller for OCR processing."),
   checksumSha256: z.string().min(32).optional()
 });
 

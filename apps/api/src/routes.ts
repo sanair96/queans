@@ -26,12 +26,12 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
   });
 
   app.post("/api/uploads/init", async (request, reply) => {
+    const input = uploadInitSchema.parse(request.body);
     const r2 = getR2ObjectStoreOrReply(reply);
     if (!r2) {
       return reply;
     }
 
-    const input = uploadInitSchema.parse(request.body);
     const objectKey = buildSourcePaperObjectKey(input.fileName);
     const presigned = await r2.createPresignedPut({
       objectKey,
@@ -58,12 +58,12 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
   });
 
   app.post<{ Params: IdParams }>("/api/uploads/:id/complete", async (request, reply) => {
+    const input = uploadCompleteSchema.parse(request.body);
     const r2 = getR2ObjectStoreOrReply(reply);
     if (!r2) {
       return reply;
     }
 
-    const input = uploadCompleteSchema.parse(request.body);
     const paperContextPayload = input.paperContext === undefined ? null : toInputJson(input.paperContext);
     const upload = await prisma.uploadObject.findUnique({
       where: { id: request.params.id },

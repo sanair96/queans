@@ -47,6 +47,8 @@ Copy `.env.example` to `.env` and fill these before runtime testing:
 - `R2_BUCKET`
 - `MISTRAL_API_KEY`
 
+Uploads are limited to PDFs of 50 MB or smaller because the current OCR activity uses Mistral's URL-based PDF OCR path.
+
 The API and worker load `.env` automatically in local development. Shell-provided values still override `.env`, which is useful when running the Docker database on a non-default host port.
 
 Provider pricing changes over time. The worker records `provider_run_costs.estimated_cost_usd` from these editable defaults:

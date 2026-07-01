@@ -5,6 +5,7 @@ import Link from "next/link";
 import { CheckCircle2, ListChecks, UploadCloud } from "lucide-react";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const maxUploadByteSize = 50 * 1024 * 1024;
 
 interface UploadInitResponse {
   uploadId: string;
@@ -49,7 +50,17 @@ export function UploadPanel() {
 
   async function upload() {
     if (!file) {
-      setStatus("Choose a PDF or image before uploading.");
+      setStatus("Choose a PDF before uploading.");
+      return;
+    }
+
+    if (file.type !== "application/pdf") {
+      setStatus("Only PDF uploads are supported.");
+      return;
+    }
+
+    if (file.size > maxUploadByteSize) {
+      setStatus("Choose a PDF that is 50 MB or smaller.");
       return;
     }
 
@@ -107,12 +118,12 @@ export function UploadPanel() {
           <UploadCloud size={42} aria-hidden="true" />
           <div>
             <h2>Source file</h2>
-            <p className="muted">PDF, scanned paper image, or exported question paper document.</p>
+            <p className="muted">PDF question paper, 50 MB or smaller.</p>
           </div>
           <input
             className="file-input"
             type="file"
-            accept="application/pdf,image/*"
+            accept="application/pdf"
             onChange={(event) => setFile(event.target.files?.[0] ?? null)}
           />
           <button className="btn" type="button" onClick={() => void upload()} disabled={busy}>
