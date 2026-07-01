@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 import { reviewPatchSchema, uploadCompleteSchema, uploadInitSchema } from "@queans/core";
-import { prisma } from "@queans/db";
+import { Prisma, prisma } from "@queans/db";
 import { loadR2ConfigFromEnv, R2ObjectStore } from "@queans/providers";
 
 import type { UploadCompleteInput } from "@queans/core";
@@ -75,12 +75,7 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
     }
 
     if (upload.status === "COMPLETED" && upload.sourcePaper) {
-      const latestRun = upload.sourcePaper.workflowRuns[0];
-      return reply.send({
-        sourcePaperId: upload.sourcePaper.id,
-        ingestionRunId: latestRun?.id,
-        status: latestRun?.status ?? "PENDING"
-      });
+      return reply.send(uploadCompletionPayload(upload.sourcePaper));
     }
 
     const head = await r2.headObject(upload.objectKey);
@@ -92,61 +87,72 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
       return reply.code(409).send({ error: "R2_OBJECT_SIZE_MISMATCH" });
     }
 
-    const result = await prisma.$transaction(async (tx) => {
-      const completedUpload = await tx.uploadObject.update({
-        where: { id: upload.id },
-        data: {
-          status: "COMPLETED",
-          etag: input.etag ?? head.etag ?? null,
-          completedAt: new Date()
-        }
-      });
-      const sourcePaper = await tx.sourcePaper.create({
-        data: {
-          uploadObjectId: completedUpload.id,
-          ...sourcePaperContextData(input.paperContext),
-          sourceFileName: completedUpload.fileName,
-          status: "QUEUED"
-        }
-      });
-      const workflowRun = await tx.workflowRun.create({
-        data: {
-          workflowType: "PAPER_INGESTION",
-          entityId: sourcePaper.id,
-          sourcePaperId: sourcePaper.id,
-          status: "PENDING",
-          currentStep: "store_file",
-          inputPayload: {
-            sourcePaperId: sourcePaper.id,
+    let result;
+    try {
+      result = await prisma.$transaction(async (tx) => {
+        const completedUpload = await tx.uploadObject.update({
+          where: { id: upload.id },
+          data: {
+            status: "COMPLETED",
+            etag: input.etag ?? head.etag ?? null,
+            completedAt: new Date()
+          }
+        });
+        const sourcePaper = await tx.sourcePaper.create({
+          data: {
             uploadObjectId: completedUpload.id,
-            objectKey: completedUpload.objectKey,
-            paperContext: paperContextPayload,
-            taskQueues: {
-              paperIngestion: config.TEMPORAL_TASK_QUEUE_PAPER_INGESTION,
-              ocr: config.TEMPORAL_TASK_QUEUE_OCR,
-              llm: config.TEMPORAL_TASK_QUEUE_LLM
+            ...sourcePaperContextData(input.paperContext),
+            sourceFileName: completedUpload.fileName,
+            status: "QUEUED"
+          }
+        });
+        const workflowRun = await tx.workflowRun.create({
+          data: {
+            workflowType: "PAPER_INGESTION",
+            entityId: sourcePaper.id,
+            sourcePaperId: sourcePaper.id,
+            status: "PENDING",
+            currentStep: "store_file",
+            inputPayload: {
+              sourcePaperId: sourcePaper.id,
+              uploadObjectId: completedUpload.id,
+              objectKey: completedUpload.objectKey,
+              paperContext: paperContextPayload,
+              taskQueues: {
+                paperIngestion: config.TEMPORAL_TASK_QUEUE_PAPER_INGESTION,
+                ocr: config.TEMPORAL_TASK_QUEUE_OCR,
+                llm: config.TEMPORAL_TASK_QUEUE_LLM
+              }
             }
           }
-        }
-      });
-      await tx.workflowStartOutbox.create({
-        data: {
-          workflowRunId: workflowRun.id
-        }
-      });
-      await tx.workflowEvent.create({
-        data: {
-          workflowRunId: workflowRun.id,
-          eventType: "UPLOAD_COMPLETED",
-          eventPayload: {
-            uploadObjectId: completedUpload.id,
-            objectKey: completedUpload.objectKey,
-            paperContext: paperContextPayload
+        });
+        await tx.workflowStartOutbox.create({
+          data: {
+            workflowRunId: workflowRun.id
           }
-        }
+        });
+        await tx.workflowEvent.create({
+          data: {
+            workflowRunId: workflowRun.id,
+            eventType: "UPLOAD_COMPLETED",
+            eventPayload: {
+              uploadObjectId: completedUpload.id,
+              objectKey: completedUpload.objectKey,
+              paperContext: paperContextPayload
+            }
+          }
+        });
+        return { sourcePaper, workflowRun };
       });
-      return { sourcePaper, workflowRun };
-    });
+    } catch (error) {
+      if (isPrismaUniqueConstraintError(error)) {
+        const existing = await findUploadCompletionPayload(upload.id);
+        if (existing) {
+          return reply.send(existing);
+        }
+      }
+      throw error;
+    }
 
     dispatchPendingWorkflowStarts(config).catch((error: unknown) => {
       request.log.error({ error }, "Workflow dispatch failed after upload completion");
@@ -363,6 +369,31 @@ function sourcePaperContextData(paperContext: UploadCompleteInput["paperContext"
     uploadedBy: paperContext?.uploadedBy ?? null,
     metadata: toNullableInputJson(paperContext?.metadata)
   };
+}
+
+export function uploadCompletionPayload(sourcePaper: {
+  id: string;
+  workflowRuns: Array<{ id: string; status: string }>;
+}) {
+  const latestRun = sourcePaper.workflowRuns[0];
+  return {
+    sourcePaperId: sourcePaper.id,
+    ingestionRunId: latestRun?.id,
+    status: latestRun?.status ?? "PENDING"
+  };
+}
+
+async function findUploadCompletionPayload(uploadId: string) {
+  const upload = await prisma.uploadObject.findUnique({
+    where: { id: uploadId },
+    include: { sourcePaper: { include: { workflowRuns: { orderBy: { createdAt: "desc" }, take: 1 } } } }
+  });
+
+  return upload?.sourcePaper ? uploadCompletionPayload(upload.sourcePaper) : undefined;
+}
+
+export function isPrismaUniqueConstraintError(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 
 function reviewStatusForDecision(decision: string) {
