@@ -40,6 +40,7 @@ interface ReviewDraft {
   cleanedQuestionText: string;
   answerText: string;
   solutionText: string;
+  marks: string;
   difficulty: string;
   reviewNotes: string;
 }
@@ -131,6 +132,16 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
             <button
               className="btn secondary"
               type="button"
+              title="Mark duplicate"
+              disabled={busyDecision !== null}
+              onClick={() => void submitDecision("MARK_DUPLICATE")}
+            >
+              <CopyCheck size={17} aria-hidden="true" />
+              Duplicate
+            </button>
+            <button
+              className="btn secondary"
+              type="button"
               title="Reject"
               disabled={busyDecision !== null}
               onClick={() => void submitDecision("REJECT")}
@@ -180,6 +191,8 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
             <pre>{selected.candidate.rawOcrText}</pre>
             <h3>Evidence</h3>
             <pre>{stableJson(selected.candidate.sourceEvidence)}</pre>
+            <h3>Review context</h3>
+            <pre>{stableJson(selected.reviewPayload)}</pre>
           </div>
 
           <form className="edit-pane">
@@ -202,6 +215,14 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
               <textarea
                 value={draft.solutionText}
                 onChange={(event) => setDraft((current) => ({ ...current, solutionText: event.target.value }))}
+              />
+            </label>
+            <label>
+              Marks
+              <input
+                value={draft.marks}
+                inputMode="decimal"
+                onChange={(event) => setDraft((current) => ({ ...current, marks: event.target.value }))}
               />
             </label>
             <label>
@@ -232,6 +253,7 @@ function draftFromItem(item: ReviewItem | undefined): ReviewDraft {
     cleanedQuestionText: item?.candidate.cleanedQuestionText ?? "",
     answerText: item?.candidate.answerText ?? "",
     solutionText: item?.candidate.solutionText ?? "",
+    marks: item?.candidate.marks === null || item?.candidate.marks === undefined ? "" : String(item.candidate.marks),
     difficulty: item?.candidate.difficulty ?? "",
     reviewNotes: ""
   };
@@ -246,6 +268,7 @@ function reviewPatchBody(item: ReviewItem, draft: ReviewDraft, decision: ReviewD
             cleanedQuestionText: draft.cleanedQuestionText,
             answerText: draft.answerText,
             solutionText: draft.solutionText,
+            marks: parseMarksDraft(draft.marks),
             difficulty: draft.difficulty
           }
         }
@@ -265,6 +288,7 @@ function correctionsFromDraft(item: ReviewItem, draft: ReviewDraft) {
     correction("cleanedQuestionText", item.candidate.cleanedQuestionText, draft.cleanedQuestionText, "OCR_ERROR"),
     correction("answerText", item.candidate.answerText ?? "", draft.answerText, "WRONG_ANSWER"),
     correction("solutionText", item.candidate.solutionText ?? "", draft.solutionText, "BAD_SOLUTION"),
+    correction("marks", item.candidate.marks === null ? "" : String(item.candidate.marks), draft.marks, "WRONG_MARKS"),
     correction("difficulty", item.candidate.difficulty ?? "", draft.difficulty, "FORMATTING_ISSUE")
   ].filter((value): value is NonNullable<typeof value> => value !== undefined);
 }
@@ -280,6 +304,20 @@ function correction(fieldName: string, oldValue: string, newValue: string, corre
     newValue,
     correctionType
   };
+}
+
+function parseMarksDraft(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const marks = Number(trimmed);
+  if (!Number.isFinite(marks) || marks < 0) {
+    throw new Error("Marks must be a non-negative number.");
+  }
+
+  return marks;
 }
 
 function formatReasons(value: unknown) {

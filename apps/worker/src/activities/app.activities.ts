@@ -620,6 +620,9 @@ function candidatePatchFromReviewPayload(value: Prisma.JsonValue): Prisma.Questi
   if ("solutionText" in candidate && typeof candidate.solutionText === "string") {
     patch.solutionText = candidate.solutionText;
   }
+  if ("marks" in candidate && (typeof candidate.marks === "number" || candidate.marks === null)) {
+    patch.marks = candidate.marks;
+  }
   if ("answerSourceType" in candidate && candidate.answerSourceType === "SOURCE_KEY") {
     patch.answerSourceType = candidate.answerSourceType;
     patch.answerSourceBacked = true;
