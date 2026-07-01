@@ -188,6 +188,14 @@ model SourcePaper {
   uploadObjectId String            @unique @map("upload_object_id")
   uploadObject   UploadObject      @relation(fields: [uploadObjectId], references: [id])
   title          String?
+  board          String?
+  classLevel     String?           @map("class_level")
+  subject        String?
+  year           Int?
+  schoolName     String?           @map("school_name")
+  examType       String?           @map("exam_type")
+  uploadedBy     String?           @map("uploaded_by")
+  metadata       Json?
   sourceFileName String            @map("source_file_name")
   status         SourcePaperStatus @default(UPLOADED)
   pageCount      Int?              @map("page_count")
@@ -200,6 +208,7 @@ model SourcePaper {
   workflowRuns       WorkflowRun[]
 
   @@index([status, createdAt])
+  @@index([board, classLevel, subject, year])
   @@map("source_papers")
 }
 

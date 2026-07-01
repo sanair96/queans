@@ -6,10 +6,11 @@ import { reviewPatchSchema, uploadCompleteSchema, uploadInitSchema } from "@quea
 import { prisma } from "@queans/db";
 import { loadR2ConfigFromEnv, R2ObjectStore } from "@queans/providers";
 
+import type { UploadCompleteInput } from "@queans/core";
 import type { ApiConfig } from "./config.js";
 import { dispatchPendingWorkflowStarts } from "./outbox.js";
 import { signalHumanReviewCompleted } from "./temporal.js";
-import { toNullableInputJson } from "./json.js";
+import { toInputJson, toNullableInputJson } from "./json.js";
 
 interface IdParams {
   id: string;
@@ -49,6 +50,7 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
 
   app.post<{ Params: IdParams }>("/api/uploads/:id/complete", async (request, reply) => {
     const input = uploadCompleteSchema.parse(request.body);
+    const paperContextPayload = input.paperContext === undefined ? null : toInputJson(input.paperContext);
     const upload = await prisma.uploadObject.findUnique({
       where: { id: request.params.id },
       include: { sourcePaper: { include: { workflowRuns: { orderBy: { createdAt: "desc" }, take: 1 } } } }
@@ -88,6 +90,7 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
       const sourcePaper = await tx.sourcePaper.create({
         data: {
           uploadObjectId: completedUpload.id,
+          ...sourcePaperContextData(input.paperContext),
           sourceFileName: completedUpload.fileName,
           status: "QUEUED"
         }
@@ -103,6 +106,7 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
             sourcePaperId: sourcePaper.id,
             uploadObjectId: completedUpload.id,
             objectKey: completedUpload.objectKey,
+            paperContext: paperContextPayload,
             taskQueues: {
               paperIngestion: config.TEMPORAL_TASK_QUEUE_PAPER_INGESTION,
               ocr: config.TEMPORAL_TASK_QUEUE_OCR,
@@ -122,7 +126,8 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
           eventType: "UPLOAD_COMPLETED",
           eventPayload: {
             uploadObjectId: completedUpload.id,
-            objectKey: completedUpload.objectKey
+            objectKey: completedUpload.objectKey,
+            paperContext: paperContextPayload
           }
         }
       });
@@ -318,6 +323,20 @@ function buildSourcePaperObjectKey(fileName: string) {
   const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
   const datePrefix = new Date().toISOString().slice(0, 10);
   return `source-papers/${datePrefix}/${randomUUID()}-${safeFileName}`;
+}
+
+function sourcePaperContextData(paperContext: UploadCompleteInput["paperContext"]) {
+  return {
+    title: paperContext?.title ?? null,
+    board: paperContext?.board ?? null,
+    classLevel: paperContext?.classLevel ?? null,
+    subject: paperContext?.subject ?? null,
+    year: paperContext?.year ?? null,
+    schoolName: paperContext?.schoolName ?? null,
+    examType: paperContext?.examType ?? null,
+    uploadedBy: paperContext?.uploadedBy ?? null,
+    metadata: toNullableInputJson(paperContext?.metadata)
+  };
 }
 
 function reviewStatusForDecision(decision: string) {

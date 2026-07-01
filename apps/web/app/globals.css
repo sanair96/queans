@@ -188,6 +188,43 @@ h2 {
   text-align: center;
 }
 
+.upload-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.context-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-content: start;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  text-align: left;
+}
+
+.field span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.field input {
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  color: var(--ink);
+  padding: 0 10px;
+}
+
 .file-input {
   width: min(100%, 420px);
   border: 1px solid var(--line);
@@ -594,6 +631,8 @@ h2 {
 
   .grid.two,
   .stat-row,
+  .upload-layout,
+  .context-form,
   .review-workbench,
   .review-columns,
   .lookup-form,

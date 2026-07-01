@@ -1,5 +1,17 @@
 import { z } from "zod";
 
+export const paperContextSchema = z.object({
+  title: z.string().trim().min(1).optional(),
+  board: z.string().trim().min(1).optional(),
+  classLevel: z.string().trim().min(1).optional(),
+  subject: z.string().trim().min(1).optional(),
+  year: z.number().int().min(1900).max(2200).optional(),
+  schoolName: z.string().trim().min(1).optional(),
+  examType: z.string().trim().min(1).optional(),
+  uploadedBy: z.string().trim().min(1).optional(),
+  metadata: z.record(z.unknown()).optional()
+});
+
 export const uploadInitSchema = z.object({
   fileName: z.string().min(1),
   mimeType: z.string().min(1),
@@ -9,7 +21,8 @@ export const uploadInitSchema = z.object({
 
 export const uploadCompleteSchema = z.object({
   etag: z.string().optional(),
-  byteSize: z.number().int().positive().optional()
+  byteSize: z.number().int().positive().optional(),
+  paperContext: paperContextSchema.optional()
 });
 
 export const reviewPatchSchema = z.object({
@@ -49,5 +62,5 @@ export const reviewPatchSchema = z.object({
 
 export type UploadInitInput = z.infer<typeof uploadInitSchema>;
 export type UploadCompleteInput = z.infer<typeof uploadCompleteSchema>;
+export type PaperContextInput = z.infer<typeof paperContextSchema>;
 export type ReviewPatchInput = z.infer<typeof reviewPatchSchema>;
-
