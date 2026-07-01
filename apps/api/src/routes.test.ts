@@ -9,6 +9,7 @@ import {
   isPrismaUniqueConstraintError,
   mutableReviewItemWhere,
   reviewItemAlreadyClosedPayload,
+  uploadCompletionConflict,
   uploadCompletionPayload
 } from "./routes.js";
 
@@ -39,6 +40,84 @@ describe("uploadCompletionPayload", () => {
       sourcePaperId: "source-paper-1",
       ingestionRunId: undefined,
       status: "PENDING"
+    });
+  });
+});
+
+describe("uploadCompletionConflict", () => {
+  it("accepts matching R2 object metadata", () => {
+    expect(
+      uploadCompletionConflict({
+        head: {
+          byteSize: 1024,
+          contentType: "application/pdf",
+          etag: "etag-1"
+        },
+        reportedByteSize: 1024,
+        storedByteSize: 1024n,
+        storedMimeType: "application/pdf"
+      })
+    ).toBeUndefined();
+  });
+
+  it("rejects client-reported byte size mismatches before ingestion", () => {
+    expect(
+      uploadCompletionConflict({
+        head: {
+          byteSize: 1024,
+          contentType: "application/pdf"
+        },
+        reportedByteSize: 512,
+        storedByteSize: 1024n,
+        storedMimeType: "application/pdf"
+      })
+    ).toEqual({ error: "UPLOAD_SIZE_MISMATCH" });
+  });
+
+  it("rejects stored R2 object byte size mismatches before ingestion", () => {
+    expect(
+      uploadCompletionConflict({
+        head: {
+          byteSize: 2048,
+          contentType: "application/pdf"
+        },
+        reportedByteSize: undefined,
+        storedByteSize: 1024n,
+        storedMimeType: "application/pdf"
+      })
+    ).toEqual({ error: "R2_OBJECT_SIZE_MISMATCH" });
+  });
+
+  it("rejects missing or non-PDF R2 content types before ingestion", () => {
+    expect(
+      uploadCompletionConflict({
+        head: {
+          byteSize: 1024
+        },
+        reportedByteSize: 1024,
+        storedByteSize: 1024n,
+        storedMimeType: "application/pdf"
+      })
+    ).toEqual({
+      error: "R2_OBJECT_CONTENT_TYPE_MISMATCH",
+      expectedMimeType: "application/pdf",
+      actualMimeType: null
+    });
+
+    expect(
+      uploadCompletionConflict({
+        head: {
+          byteSize: 1024,
+          contentType: "image/png"
+        },
+        reportedByteSize: 1024,
+        storedByteSize: 1024n,
+        storedMimeType: "application/pdf"
+      })
+    ).toEqual({
+      error: "R2_OBJECT_CONTENT_TYPE_MISMATCH",
+      expectedMimeType: "application/pdf",
+      actualMimeType: "image/png"
     });
   });
 });

@@ -4,7 +4,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 
 import { reviewPatchSchema, uploadCompleteSchema, uploadInitSchema } from "@queans/core";
 import { Prisma, prisma, ReviewStatus, WorkflowStatus } from "@queans/db";
-import { loadR2ConfigFromEnv, R2ObjectStore } from "@queans/providers";
+import { loadR2ConfigFromEnv, R2ObjectStore, type StoredObjectHead } from "@queans/providers";
 
 import type { UploadCompleteInput } from "@queans/core";
 import type { ApiConfig } from "./config.js";
@@ -79,12 +79,14 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
     }
 
     const head = await r2.headObject(upload.objectKey);
-    if (input.byteSize !== undefined && head.byteSize !== input.byteSize) {
-      return reply.code(409).send({ error: "UPLOAD_SIZE_MISMATCH" });
-    }
-
-    if (head.byteSize !== Number(upload.byteSize)) {
-      return reply.code(409).send({ error: "R2_OBJECT_SIZE_MISMATCH" });
+    const uploadConflict = uploadCompletionConflict({
+      head,
+      reportedByteSize: input.byteSize,
+      storedByteSize: upload.byteSize,
+      storedMimeType: upload.mimeType
+    });
+    if (uploadConflict) {
+      return reply.code(409).send(uploadConflict);
     }
 
     let result;
@@ -423,6 +425,35 @@ export function uploadCompletionPayload(sourcePaper: {
   };
 }
 
+interface UploadCompletionVerificationInput {
+  head: StoredObjectHead;
+  reportedByteSize: number | undefined;
+  storedByteSize: bigint | number;
+  storedMimeType: string;
+}
+
+export function uploadCompletionConflict(input: UploadCompletionVerificationInput) {
+  if (input.reportedByteSize !== undefined && input.head.byteSize !== input.reportedByteSize) {
+    return { error: "UPLOAD_SIZE_MISMATCH" };
+  }
+
+  if (input.head.byteSize !== Number(input.storedByteSize)) {
+    return { error: "R2_OBJECT_SIZE_MISMATCH" };
+  }
+
+  const actualMimeType = normalizedMimeType(input.head.contentType);
+  const expectedMimeType = normalizedMimeType(input.storedMimeType);
+  if (actualMimeType !== expectedMimeType) {
+    return {
+      error: "R2_OBJECT_CONTENT_TYPE_MISMATCH",
+      expectedMimeType,
+      actualMimeType
+    };
+  }
+
+  return undefined;
+}
+
 async function findUploadCompletionPayload(uploadId: string) {
   const upload = await prisma.uploadObject.findUnique({
     where: { id: uploadId },
@@ -430,6 +461,10 @@ async function findUploadCompletionPayload(uploadId: string) {
   });
 
   return upload?.sourcePaper ? uploadCompletionPayload(upload.sourcePaper) : undefined;
+}
+
+function normalizedMimeType(value: string | undefined) {
+  return value?.split(";")[0]?.trim().toLowerCase() || null;
 }
 
 export function isPrismaUniqueConstraintError(error: unknown) {

@@ -119,7 +119,7 @@ Default URLs:
 
 1. `POST /api/uploads/init` creates a pending `upload_objects` row and returns a presigned R2 PUT URL.
 2. The browser uploads the file directly to R2.
-3. `POST /api/uploads/:id/complete` verifies the object, creates the source paper and ingestion run, and starts the workflow via the outbox.
+3. `POST /api/uploads/:id/complete` verifies the object size and content type, creates the source paper and ingestion run, and starts the workflow via the outbox.
 4. Temporal runs OCR on the private R2 object using a short-lived signed read URL.
 5. The extraction activity converts OCR pages into structured `question_candidates`.
 6. The dedupe step compares candidates with approved bank questions and persists likely `duplicate_matches`.
