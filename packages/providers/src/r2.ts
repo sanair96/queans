@@ -1,6 +1,8 @@
 import { HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
+export const maxR2PresignExpiresSeconds = 7 * 24 * 60 * 60;
+
 export interface R2Config {
   accountId: string;
   accessKeyId: string;
@@ -25,16 +27,29 @@ export interface StoredObjectHead {
 
 export function loadR2ConfigFromEnv(env: NodeJS.ProcessEnv): R2Config {
   const accountId = requiredEnv(env, "R2_ACCOUNT_ID");
-  const endpoint = env.R2_ENDPOINT?.trim() || `https://${accountId}.r2.cloudflarestorage.com`;
   return {
     accountId,
     accessKeyId: requiredEnv(env, "R2_ACCESS_KEY_ID"),
     secretAccessKey: requiredEnv(env, "R2_SECRET_ACCESS_KEY"),
     bucket: requiredEnv(env, "R2_BUCKET"),
-    endpoint,
+    endpoint: r2EndpointForAccount(accountId, env.R2_ENDPOINT),
     region: env.R2_REGION?.trim() || "auto",
-    presignExpiresSeconds: Number.parseInt(env.R2_PRESIGN_EXPIRES_SECONDS ?? "900", 10)
+    presignExpiresSeconds: boundedPositiveIntegerEnv(
+      env,
+      "R2_PRESIGN_EXPIRES_SECONDS",
+      900,
+      maxR2PresignExpiresSeconds
+    )
   };
+}
+
+export function r2EndpointForAccount(accountId: string, configuredEndpoint: string | undefined) {
+  const endpoint = configuredEndpoint?.trim();
+  if (!endpoint || endpoint.includes("<account-id>")) {
+    return `https://${accountId}.r2.cloudflarestorage.com`;
+  }
+
+  return endpoint;
 }
 
 export class R2ObjectStore {
@@ -121,4 +136,18 @@ function requiredEnv(env: NodeJS.ProcessEnv, key: string) {
     throw new Error(`Missing required environment variable: ${key}`);
   }
   return value;
+}
+
+function boundedPositiveIntegerEnv(env: NodeJS.ProcessEnv, key: string, defaultValue: number, maxValue: number) {
+  const value = env[key]?.trim();
+  if (!value) {
+    return defaultValue;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > maxValue) {
+    throw new Error(`${key} must be an integer between 1 and ${maxValue}`);
+  }
+
+  return parsed;
 }

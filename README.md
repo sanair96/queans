@@ -47,6 +47,8 @@ Copy `.env.example` to `.env` and fill these before runtime testing:
 - `R2_BUCKET`
 - `MISTRAL_API_KEY`
 
+Leave `R2_ENDPOINT` empty for the standard Cloudflare R2 endpoint; the provider derives it from `R2_ACCOUNT_ID`, and it also normalizes the copied `<account-id>` placeholder to that derived endpoint. Set it only when using a custom S3-compatible endpoint. `R2_PRESIGN_EXPIRES_SECONDS` defaults to `900` and must stay between `1` and `604800`.
+
 Uploads are limited to PDFs of 50 MB or smaller because the current OCR activity uses Mistral's URL-based PDF OCR path.
 
 The API and worker load `.env` automatically in local development. Shell-provided values still override `.env`, which is useful when running the Docker database on a non-default host port.
