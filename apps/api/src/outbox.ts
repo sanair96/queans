@@ -28,6 +28,28 @@ export function workflowDispatchFailureUpdate(error: unknown): Prisma.WorkflowSt
   };
 }
 
+export function workflowDispatchSuccessRunUpdate(workflowId: string) {
+  return {
+    temporalRunId: workflowId,
+    status: "RUNNING",
+    currentStep: "store_file"
+  } satisfies Prisma.WorkflowRunUpdateInput;
+}
+
+export function workflowDispatchSuccessSourcePaperUpdate() {
+  return {
+    status: "PROCESSING"
+  } satisfies Prisma.SourcePaperUpdateInput;
+}
+
+export function workflowDispatchSuccessOutboxUpdate() {
+  return {
+    status: "STARTED",
+    attemptCount: { increment: 1 },
+    lastError: null
+  } satisfies Prisma.WorkflowStartOutboxUpdateInput;
+}
+
 export async function dispatchPendingWorkflowStarts(config: ApiConfig, limit = 10, maxAttempts = WORKFLOW_DISPATCH_MAX_ATTEMPTS) {
   const pending = await prisma.workflowStartOutbox.findMany({
     where: retryableWorkflowStartOutboxWhere(maxAttempts),
@@ -50,15 +72,15 @@ export async function dispatchPendingWorkflowStarts(config: ApiConfig, limit = 1
       await prisma.$transaction([
         prisma.workflowRun.update({
           where: { id: item.workflowRunId },
-          data: {
-            temporalRunId: workflowId,
-            status: "RUNNING",
-            currentStep: "store_file"
-          }
+          data: workflowDispatchSuccessRunUpdate(workflowId)
+        }),
+        prisma.sourcePaper.update({
+          where: { id: item.workflowRun.sourcePaperId },
+          data: workflowDispatchSuccessSourcePaperUpdate()
         }),
         prisma.workflowStartOutbox.update({
           where: { id: item.id },
-          data: { status: "STARTED", attemptCount: { increment: 1 }, lastError: null }
+          data: workflowDispatchSuccessOutboxUpdate()
         }),
         prisma.workflowEvent.create({
           data: {

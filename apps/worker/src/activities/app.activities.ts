@@ -34,6 +34,10 @@ export async function recordStepStarted(input: PaperIngestionWorkflowInput, step
         currentStep: stepName
       }
     }),
+    prisma.sourcePaper.update({
+      where: { id: input.sourcePaperId },
+      data: sourcePaperUpdateForStartedWorkflowStep()
+    }),
     prisma.workflowEvent.create({
       data: {
         workflowRunId: input.ingestionRunId,
@@ -42,6 +46,12 @@ export async function recordStepStarted(input: PaperIngestionWorkflowInput, step
       }
     })
   ]);
+}
+
+export function sourcePaperUpdateForStartedWorkflowStep() {
+  return {
+    status: "PROCESSING"
+  } satisfies Prisma.SourcePaperUpdateInput;
 }
 
 export async function recordStepSucceeded(

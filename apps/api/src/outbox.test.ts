@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { retryableWorkflowStartOutboxWhere, workflowDispatchFailureUpdate } from "./outbox.js";
+import {
+  retryableWorkflowStartOutboxWhere,
+  workflowDispatchFailureUpdate,
+  workflowDispatchSuccessOutboxUpdate,
+  workflowDispatchSuccessRunUpdate,
+  workflowDispatchSuccessSourcePaperUpdate
+} from "./outbox.js";
 
 describe("workflow start outbox helpers", () => {
   it("selects pending rows and failed rows below the retry cap", () => {
@@ -28,6 +34,22 @@ describe("workflow start outbox helpers", () => {
       status: "FAILED",
       attemptCount: { increment: 1 },
       lastError: "Unknown workflow dispatch error"
+    });
+  });
+
+  it("marks the run, source paper, and outbox as started after Temporal accepts dispatch", () => {
+    expect(workflowDispatchSuccessRunUpdate("temporal-run-1")).toEqual({
+      temporalRunId: "temporal-run-1",
+      status: "RUNNING",
+      currentStep: "store_file"
+    });
+    expect(workflowDispatchSuccessSourcePaperUpdate()).toEqual({
+      status: "PROCESSING"
+    });
+    expect(workflowDispatchSuccessOutboxUpdate()).toEqual({
+      status: "STARTED",
+      attemptCount: { increment: 1 },
+      lastError: null
     });
   });
 });

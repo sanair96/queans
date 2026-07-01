@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { Prisma } from "@queans/db";
+import { Prisma, ReviewStatus } from "@queans/db";
 
 import {
+  canPatchReviewItem,
   ingestionQueuedPayload,
   isActiveIngestionStatus,
   isPrismaUniqueConstraintError,
+  mutableReviewItemWhere,
+  reviewItemAlreadyClosedPayload,
   uploadCompletionPayload
 } from "./routes.js";
 
@@ -90,6 +93,45 @@ describe("ingestionQueuedPayload", () => {
     expect(ingestionQueuedPayload({ id: "run-1", status: "WAITING_FOR_REVIEW" })).toEqual({
       ingestionRunId: "run-1",
       status: "WAITING_FOR_REVIEW"
+    });
+  });
+});
+
+describe("canPatchReviewItem", () => {
+  it("allows open and assigned review work that has not been applied", () => {
+    expect(canPatchReviewItem({ status: ReviewStatus.OPEN, appliedAt: null })).toBe(true);
+    expect(canPatchReviewItem({ status: ReviewStatus.ASSIGNED, appliedAt: null })).toBe(true);
+  });
+
+  it("rejects terminal or already-applied review work", () => {
+    expect(canPatchReviewItem({ status: ReviewStatus.APPROVED, appliedAt: null })).toBe(false);
+    expect(canPatchReviewItem({ status: ReviewStatus.OPEN, appliedAt: new Date("2026-07-01T10:20:30.000Z") })).toBe(
+      false
+    );
+  });
+});
+
+describe("mutableReviewItemWhere", () => {
+  it("matches only unapplied open or assigned review work for write-time guarding", () => {
+    expect(mutableReviewItemWhere("review-item-1")).toEqual({
+      id: "review-item-1",
+      status: { in: [ReviewStatus.OPEN, ReviewStatus.ASSIGNED] },
+      appliedAt: null
+    });
+  });
+});
+
+describe("reviewItemAlreadyClosedPayload", () => {
+  it("returns a stable conflict payload for closed review work", () => {
+    expect(
+      reviewItemAlreadyClosedPayload({
+        status: ReviewStatus.APPROVED,
+        appliedAt: new Date("2026-07-01T10:20:30.000Z")
+      })
+    ).toEqual({
+      error: "REVIEW_ITEM_ALREADY_CLOSED",
+      status: ReviewStatus.APPROVED,
+      appliedAt: "2026-07-01T10:20:30.000Z"
     });
   });
 });

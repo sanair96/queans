@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 import { reviewPatchSchema, uploadCompleteSchema, uploadInitSchema } from "@queans/core";
-import { Prisma, prisma, WorkflowStatus } from "@queans/db";
+import { Prisma, prisma, ReviewStatus, WorkflowStatus } from "@queans/db";
 import { loadR2ConfigFromEnv, R2ObjectStore } from "@queans/providers";
 
 import type { UploadCompleteInput } from "@queans/core";
@@ -295,32 +295,52 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
       return reply.code(404).send({ error: "REVIEW_ITEM_NOT_FOUND" });
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.reviewItem.update({
-        where: { id: reviewItem.id },
-        data: {
-          status: reviewStatusForDecision(input.decision),
-          reviewedBy: input.reviewedBy ?? null,
-          reviewNotes: input.reviewNotes ?? null,
-          reviewPayload: toNullableInputJson(input.reviewPayload),
-          decision: input.decision,
-          reviewedAt: new Date()
-        }
-      });
+    if (!canPatchReviewItem(reviewItem)) {
+      return reply.code(409).send(reviewItemAlreadyClosedPayload(reviewItem));
+    }
 
-      for (const correction of input.corrections ?? []) {
-        await tx.reviewCorrection.create({
+    try {
+      await prisma.$transaction(async (tx) => {
+        const updateResult = await tx.reviewItem.updateMany({
+          where: mutableReviewItemWhere(reviewItem.id),
           data: {
-            reviewItemId: reviewItem.id,
-            fieldName: correction.fieldName,
-            oldValue: toNullableInputJson(correction.oldValue),
-            newValue: toNullableInputJson(correction.newValue),
-            correctionType: correction.correctionType,
-            reviewerId: input.reviewedBy ?? null
+            status: reviewStatusForDecision(input.decision),
+            reviewedBy: input.reviewedBy ?? null,
+            reviewNotes: input.reviewNotes ?? null,
+            reviewPayload: toNullableInputJson(input.reviewPayload),
+            decision: input.decision,
+            reviewedAt: new Date()
           }
         });
+
+        if (updateResult.count === 0) {
+          throw new ReviewItemAlreadyClosedError();
+        }
+
+        for (const correction of input.corrections ?? []) {
+          await tx.reviewCorrection.create({
+            data: {
+              reviewItemId: reviewItem.id,
+              fieldName: correction.fieldName,
+              oldValue: toNullableInputJson(correction.oldValue),
+              newValue: toNullableInputJson(correction.newValue),
+              correctionType: correction.correctionType,
+              reviewerId: input.reviewedBy ?? null
+            }
+          });
+        }
+      });
+    } catch (error) {
+      if (!isReviewItemAlreadyClosedError(error)) {
+        throw error;
       }
-    });
+
+      const latestReviewItem = await prisma.reviewItem.findUnique({
+        where: { id: reviewItem.id },
+        select: { status: true, appliedAt: true }
+      });
+      return reply.code(409).send(reviewItemAlreadyClosedPayload(latestReviewItem ?? reviewItem));
+    }
 
     const latestRun = reviewItem.sourcePaper.workflowRuns[0];
     if (latestRun) {
@@ -431,20 +451,53 @@ export function ingestionQueuedPayload(workflowRun: { id: string; status: string
   };
 }
 
+interface ReviewItemMutationState {
+  status: ReviewStatus;
+  appliedAt: Date | null;
+}
+
+const mutableReviewStatuses = [ReviewStatus.OPEN, ReviewStatus.ASSIGNED] as const;
+
+export function canPatchReviewItem(reviewItem: ReviewItemMutationState) {
+  return reviewItem.appliedAt === null && mutableReviewStatuses.some((status) => status === reviewItem.status);
+}
+
+export function mutableReviewItemWhere(id: string) {
+  return {
+    id,
+    status: { in: [...mutableReviewStatuses] },
+    appliedAt: null
+  } satisfies Prisma.ReviewItemWhereInput;
+}
+
+export function reviewItemAlreadyClosedPayload(reviewItem: ReviewItemMutationState) {
+  return {
+    error: "REVIEW_ITEM_ALREADY_CLOSED",
+    status: reviewItem.status,
+    appliedAt: reviewItem.appliedAt?.toISOString() ?? null
+  };
+}
+
+class ReviewItemAlreadyClosedError extends Error {}
+
+function isReviewItemAlreadyClosedError(error: unknown) {
+  return error instanceof ReviewItemAlreadyClosedError;
+}
+
 function reviewStatusForDecision(decision: string) {
   switch (decision) {
     case "APPROVE":
-      return "APPROVED";
+      return ReviewStatus.APPROVED;
     case "EDIT_AND_APPROVE":
-      return "EDITED";
+      return ReviewStatus.EDITED;
     case "REJECT":
     case "MARK_UNPROCESSABLE":
-      return "REJECTED";
+      return ReviewStatus.REJECTED;
     case "MARK_DUPLICATE":
-      return "SKIPPED";
+      return ReviewStatus.SKIPPED;
     case "NEEDS_MORE_INFO":
-      return "ASSIGNED";
+      return ReviewStatus.ASSIGNED;
     default:
-      return "OPEN";
+      return ReviewStatus.OPEN;
   }
 }
