@@ -4,6 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { CheckCircle2, ListChecks, UploadCloud } from "lucide-react";
 
+import { assertOk } from "./api-errors";
+
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 const maxUploadByteSize = 50 * 1024 * 1024;
 
@@ -79,7 +81,7 @@ export function UploadPanel() {
           byteSize: file.size
         })
       });
-      assertOk(initResponse);
+      await assertOk(initResponse, "Upload session");
       const init = (await initResponse.json()) as UploadInitResponse;
 
       setStatus("Uploading file to R2.");
@@ -88,7 +90,7 @@ export function UploadPanel() {
         headers: { "Content-Type": file.type || "application/octet-stream" },
         body: file
       });
-      assertOk(uploadResponse);
+      await assertOk(uploadResponse, "R2 upload");
 
       setStatus("Verifying upload and queueing workflow.");
       const completeResponse = await fetch(`${apiBaseUrl}/api/uploads/${init.uploadId}/complete`, {
@@ -100,7 +102,7 @@ export function UploadPanel() {
           paperContext: paperContextPayload
         })
       });
-      assertOk(completeResponse);
+      await assertOk(completeResponse, "Upload verification");
       const complete = (await completeResponse.json()) as UploadCompleteResponse;
       setRun(complete);
       setStatus("Queued for asynchronous processing.");
@@ -247,10 +249,4 @@ function optionalYear(value: string) {
     throw new Error("Year must be between 1900 and 2200.");
   }
   return year;
-}
-
-function assertOk(response: Response) {
-  if (!response.ok) {
-    throw new Error(`Request failed with ${response.status}`);
-  }
 }

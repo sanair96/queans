@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Ban, Check, CopyCheck, Save, X } from "lucide-react";
 
+import { assertOk } from "../api-errors";
+
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 interface ReviewItem {
@@ -73,9 +75,7 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
         body: JSON.stringify(reviewPatchBody(selected, draft, decision))
       });
 
-      if (!response.ok) {
-        throw new Error(`Review update failed with ${response.status}`);
-      }
+      await assertOk(response, "Review update");
 
       const remaining = items.filter((item) => item.id !== selected.id);
       setItems(remaining);

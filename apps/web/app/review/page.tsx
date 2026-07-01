@@ -29,7 +29,7 @@ interface ReviewItem {
 }
 
 export default async function ReviewPage() {
-  const data = await apiGet<{ reviewItems: ReviewItem[] }>("/api/review/tasks").catch(() => ({ reviewItems: [] }));
+  const data = await loadReviewItems();
 
   return (
     <>
@@ -39,7 +39,25 @@ export default async function ReviewPage() {
           <h1>Open review queue</h1>
         </div>
       </header>
-      <ReviewWorkbench initialItems={data.reviewItems} />
+      {data.error ? (
+        <section className="panel empty-state">
+          <strong>{data.error}</strong>
+        </section>
+      ) : (
+        <ReviewWorkbench initialItems={data.reviewItems} />
+      )}
     </>
   );
+}
+
+async function loadReviewItems() {
+  try {
+    const data = await apiGet<{ reviewItems: ReviewItem[] }>("/api/review/tasks");
+    return { reviewItems: data.reviewItems, error: undefined };
+  } catch (error) {
+    return {
+      reviewItems: [],
+      error: error instanceof Error ? error.message : "Review queue failed to load."
+    };
+  }
 }

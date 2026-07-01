@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Search } from "lucide-react";
 
+import { assertOk } from "../api-errors";
+
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 interface IngestionRun {
@@ -73,9 +75,7 @@ export function RunLookup() {
       const response = await fetch(`${apiBaseUrl}/api/ingestions/${trimmed}`, {
         cache: "no-store"
       });
-      if (!response.ok) {
-        throw new Error(`Run lookup failed with ${response.status}`);
-      }
+      await assertOk(response, "Run lookup");
       setRun((await response.json()) as IngestionRun);
     } catch (error) {
       setRun(null);

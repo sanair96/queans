@@ -11,7 +11,7 @@ interface Question {
 }
 
 export default async function QuestionsPage() {
-  const data = await apiGet<{ questions: Question[] }>("/api/questions").catch(() => ({ questions: [] }));
+  const data = await loadQuestions();
 
   return (
     <>
@@ -34,7 +34,12 @@ export default async function QuestionsPage() {
             </tr>
           </thead>
           <tbody>
-            {data.questions.map((question) => (
+            {data.error ? (
+              <tr>
+                <td colSpan={5} className="muted">{data.error}</td>
+              </tr>
+            ) : null}
+            {!data.error ? data.questions.map((question) => (
               <tr key={question.id}>
                 <td>{question.questionText}</td>
                 <td>{question.questionType}</td>
@@ -42,8 +47,8 @@ export default async function QuestionsPage() {
                 <td>{question.topic?.name ?? "-"}</td>
                 <td>{question.answers[0]?.sourceType ?? "-"}</td>
               </tr>
-            ))}
-            {data.questions.length === 0 ? (
+            )) : null}
+            {!data.error && data.questions.length === 0 ? (
               <tr>
                 <td colSpan={5} className="muted">No approved questions yet.</td>
               </tr>
@@ -55,3 +60,14 @@ export default async function QuestionsPage() {
   );
 }
 
+async function loadQuestions() {
+  try {
+    const data = await apiGet<{ questions: Question[] }>("/api/questions");
+    return { questions: data.questions, error: undefined };
+  } catch (error) {
+    return {
+      questions: [],
+      error: error instanceof Error ? error.message : "Questions failed to load."
+    };
+  }
+}
