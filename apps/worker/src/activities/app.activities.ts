@@ -7,6 +7,7 @@ import {
 } from "@queans/core";
 import { prisma, Prisma } from "@queans/db";
 
+import { candidateOcrConfidence } from "./ocr-confidence.js";
 import { toInputJson } from "../json.js";
 
 export async function recordStepStarted(input: PaperIngestionWorkflowInput, stepName: PaperIngestionStep) {
@@ -75,18 +76,28 @@ export async function recordStepSucceeded(
 }
 
 export async function createReviewItemsForCandidates(input: PaperIngestionWorkflowInput) {
-  const candidates = await prisma.questionCandidate.findMany({
-    where: {
-      sourcePaperId: input.sourcePaperId,
-      reviewStatus: { in: ["NEEDS_REVIEW", "EXTRACTED"] }
-    }
-  });
+  const [candidates, ocrPages] = await Promise.all([
+    prisma.questionCandidate.findMany({
+      where: {
+        sourcePaperId: input.sourcePaperId,
+        reviewStatus: { in: ["NEEDS_REVIEW", "EXTRACTED"] }
+      }
+    }),
+    prisma.ocrPage.findMany({
+      where: { sourcePaperId: input.sourcePaperId },
+      select: {
+        pageNumber: true,
+        averageConfidence: true,
+        minimumConfidence: true
+      }
+    })
+  ]);
 
   let created = 0;
   for (const candidate of candidates) {
     const fieldConfidence = confidenceRecord(candidate.fieldConfidence);
     const result = evaluateCandidateConfidence({
-      ocr: {},
+      ocr: candidateOcrConfidence(candidate, ocrPages),
       fields: {
         question_text: {
           confidence: fieldConfidence.question_text ?? 0,
