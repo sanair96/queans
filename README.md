@@ -49,6 +49,12 @@ Copy `.env.example` to `.env` and fill these before runtime testing:
 
 The API and worker load `.env` automatically in local development. Shell-provided values still override `.env`, which is useful when running the Docker database on a non-default host port.
 
+Provider pricing changes over time. The worker records `provider_run_costs.estimated_cost_usd` from these editable defaults:
+
+- `MISTRAL_OCR_USD_PER_1000_PAGES=4`
+- `MISTRAL_EXTRACTOR_INPUT_USD_PER_MILLION_TOKENS=0.15`
+- `MISTRAL_EXTRACTOR_OUTPUT_USD_PER_MILLION_TOKENS=0.60`
+
 Optional Google Document AI benchmarking needs:
 
 - `DOCUMENT_AI_ENABLED=true`

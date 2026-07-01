@@ -3,6 +3,7 @@ import { prisma } from "@queans/db";
 import { loadMistralConfigFromEnv, loadR2ConfigFromEnv, MistralOcrProvider, R2ObjectStore } from "@queans/providers";
 
 import { toInputJson, toNullableInputJson } from "../json.js";
+import { estimateMistralOcrCostUsd, formatCostDecimal, loadProviderPricing } from "./provider-cost.js";
 
 export async function runOcrAndPersist(input: PaperIngestionWorkflowInput) {
   const sourcePaper = await prisma.sourcePaper.findUnique({
@@ -18,6 +19,8 @@ export async function runOcrAndPersist(input: PaperIngestionWorkflowInput) {
   const documentUrl = await objectStore.createPresignedRead(sourcePaper.uploadObject.objectKey);
   const ocrProvider = new MistralOcrProvider(loadMistralConfigFromEnv(process.env));
   const result = await ocrProvider.processDocumentUrl(documentUrl);
+  const pageCount = result.usage.pagesProcessed ?? result.pages.length;
+  const estimatedCostUsd = estimateMistralOcrCostUsd(pageCount, loadProviderPricing(process.env));
 
   await prisma.$transaction(async (tx) => {
     await tx.sourcePaper.update({
@@ -92,7 +95,8 @@ export async function runOcrAndPersist(input: PaperIngestionWorkflowInput) {
         provider: result.provider,
         model: result.model,
         operation: "ocr",
-        pageCount: result.usage.pagesProcessed ?? result.pages.length,
+        pageCount,
+        estimatedCostUsd: formatCostDecimal(estimatedCostUsd),
         rawUsage: toInputJson(result.usage)
       }
     });
