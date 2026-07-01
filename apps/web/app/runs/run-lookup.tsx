@@ -11,6 +11,8 @@ interface IngestionRun {
   status: string;
   currentStep: string | null;
   sourcePaperId: string | null;
+  outputPayload: unknown;
+  errorPayload: unknown;
   counts?: {
     questionCandidates: number;
     reviewItems: number;
@@ -156,6 +158,13 @@ export function RunLookup() {
             </section>
           </div>
 
+          {hasPayload(run.outputPayload) || hasPayload(run.errorPayload) ? (
+            <section className="panel">
+              <h2>{hasPayload(run.errorPayload) ? "Failure output" : "Run output"}</h2>
+              <pre className="json-block">{stableJson(hasPayload(run.errorPayload) ? run.errorPayload : run.outputPayload)}</pre>
+            </section>
+          ) : null}
+
           <section className="panel">
             <h2>Provider usage</h2>
             <table className="table">
@@ -198,4 +207,8 @@ export function RunLookup() {
 
 function stableJson(value: unknown) {
   return JSON.stringify(value, null, 2);
+}
+
+function hasPayload(value: unknown) {
+  return value !== null && value !== undefined;
 }

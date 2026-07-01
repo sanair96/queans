@@ -436,13 +436,15 @@ export async function commitApprovedCandidates(input: PaperIngestionWorkflowInpu
   return { questionsCommitted: committed };
 }
 
-export async function markWorkflowCompleted(input: PaperIngestionWorkflowInput) {
+export async function markWorkflowCompleted(input: PaperIngestionWorkflowInput, outputPayload: unknown = {}) {
+  const completionPayload = workflowCompletionPayload(input, outputPayload);
   await prisma.$transaction([
     prisma.workflowRun.update({
       where: { id: input.ingestionRunId },
       data: {
         status: "COMPLETED",
         currentStep: "complete",
+        outputPayload: toInputJson(completionPayload),
         completedAt: new Date()
       }
     }),
@@ -454,7 +456,7 @@ export async function markWorkflowCompleted(input: PaperIngestionWorkflowInput) 
       data: {
         workflowRunId: input.ingestionRunId,
         eventType: "WORKFLOW_COMPLETED",
-        eventPayload: {}
+        eventPayload: toInputJson(completionPayload)
       }
     })
   ]);
@@ -642,6 +644,17 @@ export function answerReviewStatusForCandidate(candidate: {
   }
 
   return ReviewStatus.OPEN;
+}
+
+export function workflowCompletionPayload(input: PaperIngestionWorkflowInput, outputPayload: unknown) {
+  return {
+    sourcePaperId: input.sourcePaperId,
+    ...(isRecord(outputPayload) ? outputPayload : { result: outputPayload })
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function candidatePatchFromReviewPayload(value: Prisma.JsonValue): Prisma.QuestionCandidateUpdateInput {

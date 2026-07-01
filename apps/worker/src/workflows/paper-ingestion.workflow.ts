@@ -97,7 +97,7 @@ export async function PaperIngestionWorkflow(input: PaperIngestionWorkflowInput)
     await app.recordStepSucceeded(input, "commit_to_question_bank", commitSummary);
 
     currentStep = "complete";
-    await app.markWorkflowCompleted(input);
+    await app.markWorkflowCompleted(input, commitSummary);
   } catch (error) {
     await app.markWorkflowFailed(input, currentStep, serializeWorkflowFailure(error));
     throw error;

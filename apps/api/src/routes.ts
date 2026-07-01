@@ -252,6 +252,8 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
       status: workflowRun.status,
       currentStep: workflowRun.currentStep,
       sourcePaperId: workflowRun.sourcePaperId,
+      outputPayload: workflowRun.outputPayload,
+      errorPayload: workflowRun.errorPayload,
       counts: workflowRun.sourcePaper?._count,
       steps: workflowRun.steps,
       events: workflowRun.events,

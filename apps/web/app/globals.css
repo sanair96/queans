@@ -615,6 +615,18 @@ h2 {
   word-break: break-word;
 }
 
+.json-block {
+  overflow: auto;
+  margin-bottom: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #191f1c;
+  color: #f0f7f2;
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 @media (max-width: 860px) {
   .shell {
     grid-template-columns: 1fr;

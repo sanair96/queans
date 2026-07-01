@@ -5,7 +5,8 @@ import { CandidateStatus, ReviewStatus } from "@queans/db";
 import {
   answerReviewStatusForCandidate,
   candidateUpdateForReviewedItem,
-  reviewGateForConfidenceDecision
+  reviewGateForConfidenceDecision,
+  workflowCompletionPayload
 } from "./app.activities.js";
 
 describe("reviewGateForConfidenceDecision", () => {
@@ -96,5 +97,26 @@ describe("answerReviewStatusForCandidate", () => {
         answerSourceBacked: false
       })
     ).toBe(ReviewStatus.APPROVED);
+  });
+});
+
+describe("workflowCompletionPayload", () => {
+  it("includes source paper identity with the final commit summary", () => {
+    expect(
+      workflowCompletionPayload(
+        { ingestionRunId: "run-1", sourcePaperId: "source-paper-1" },
+        { questionsCommitted: 3 }
+      )
+    ).toEqual({
+      sourcePaperId: "source-paper-1",
+      questionsCommitted: 3
+    });
+  });
+
+  it("wraps non-object completion output", () => {
+    expect(workflowCompletionPayload({ ingestionRunId: "run-1", sourcePaperId: "source-paper-1" }, "done")).toEqual({
+      sourcePaperId: "source-paper-1",
+      result: "done"
+    });
   });
 });
