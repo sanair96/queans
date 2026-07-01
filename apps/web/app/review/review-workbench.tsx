@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, CopyCheck, Save, X } from "lucide-react";
+import { Ban, Check, CopyCheck, Save, X } from "lucide-react";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -138,6 +138,16 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
             >
               <CopyCheck size={17} aria-hidden="true" />
               Duplicate
+            </button>
+            <button
+              className="btn secondary"
+              type="button"
+              title="Mark unusable"
+              disabled={busyDecision !== null}
+              onClick={() => void submitDecision("MARK_UNPROCESSABLE")}
+            >
+              <Ban size={17} aria-hidden="true" />
+              Unusable
             </button>
             <button
               className="btn secondary"

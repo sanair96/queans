@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { CandidateStatus } from "@queans/db";
 
-import { reviewGateForConfidenceDecision } from "./app.activities.js";
+import { candidateUpdateForReviewedItem, reviewGateForConfidenceDecision } from "./app.activities.js";
 
 describe("reviewGateForConfidenceDecision", () => {
   it("auto-approves clean candidates without creating review work", () => {
@@ -34,6 +34,28 @@ describe("reviewGateForConfidenceDecision", () => {
       candidateStatus: CandidateStatus.REJECTED,
       createReviewItem: false,
       recordReviewReasons: true
+    });
+  });
+});
+
+describe("candidateUpdateForReviewedItem", () => {
+  it("keeps reviewer-marked unusable candidates out of the bank with a distinct status", () => {
+    expect(candidateUpdateForReviewedItem("REJECTED", "MARK_UNPROCESSABLE", null)).toEqual({
+      reviewStatus: "UNPROCESSABLE"
+    });
+  });
+
+  it("keeps reviewer rejections distinct from unusable candidates", () => {
+    expect(candidateUpdateForReviewedItem("REJECTED", "REJECT", null)).toEqual({
+      reviewStatus: "REJECTED"
+    });
+  });
+
+  it("marks reviewer-approved candidates as human verified", () => {
+    expect(candidateUpdateForReviewedItem("APPROVED", "APPROVE", null)).toEqual({
+      reviewStatus: "APPROVED",
+      answerSourceType: "HUMAN_VERIFIED",
+      answerSourceBacked: true
     });
   });
 });

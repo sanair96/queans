@@ -374,7 +374,7 @@ export async function applyReviewedItems(input: PaperIngestionWorkflowInput) {
     await prisma.$transaction([
       prisma.questionCandidate.update({
         where: { id: item.candidateId },
-        data: candidateUpdateForReviewedItem(item.status, item.reviewPayload)
+        data: candidateUpdateForReviewedItem(item.status, item.decision, item.reviewPayload)
       }),
       prisma.reviewItem.update({
         where: { id: item.id },
@@ -598,7 +598,11 @@ function severityForReasons(reasons: ReviewReasonCode[]) {
   return "LOW";
 }
 
-function candidateUpdateForReviewedItem(status: string, reviewPayload: Prisma.JsonValue): Prisma.QuestionCandidateUpdateInput {
+export function candidateUpdateForReviewedItem(
+  status: string,
+  decision: string | null,
+  reviewPayload: Prisma.JsonValue
+): Prisma.QuestionCandidateUpdateInput {
   switch (status) {
     case "APPROVED":
       return {
@@ -614,6 +618,9 @@ function candidateUpdateForReviewedItem(status: string, reviewPayload: Prisma.Js
         answerSourceBacked: true
       };
     case "REJECTED":
+      if (decision === "MARK_UNPROCESSABLE") {
+        return { reviewStatus: "UNPROCESSABLE" };
+      }
       return { reviewStatus: "REJECTED" };
     case "SKIPPED":
       return { reviewStatus: "DUPLICATE" };
