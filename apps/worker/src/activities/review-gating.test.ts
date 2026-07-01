@@ -63,6 +63,29 @@ describe("candidateUpdateForReviewedItem", () => {
       answerSourceBacked: true
     });
   });
+
+  it("normalizes edited candidate text before approval", () => {
+    expect(
+      candidateUpdateForReviewedItem("EDITED", "EDIT_AND_APPROVE", {
+        candidate: {
+          cleanedQuestionText: "  What is inertia?  ",
+          answerText: "  The tendency to resist a change in motion.  ",
+          solutionText: "   ",
+          marks: null,
+          difficulty: "  easy  "
+        }
+      })
+    ).toEqual({
+      cleanedQuestionText: "What is inertia?",
+      answerText: "The tendency to resist a change in motion.",
+      solutionText: null,
+      marks: null,
+      difficulty: "easy",
+      reviewStatus: "EDITED_AND_APPROVED",
+      answerSourceType: "HUMAN_VERIFIED",
+      answerSourceBacked: true
+    });
+  });
 });
 
 describe("answerReviewStatusForCandidate", () => {

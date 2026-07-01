@@ -669,13 +669,19 @@ function candidatePatchFromReviewPayload(value: Prisma.JsonValue): Prisma.Questi
 
   const patch: Prisma.QuestionCandidateUpdateInput = {};
   if ("cleanedQuestionText" in candidate && typeof candidate.cleanedQuestionText === "string") {
-    patch.cleanedQuestionText = candidate.cleanedQuestionText;
+    const cleanedQuestionText = trimmedNonEmptyString(candidate.cleanedQuestionText);
+    if (cleanedQuestionText) {
+      patch.cleanedQuestionText = cleanedQuestionText;
+    }
   }
   if ("answerText" in candidate && typeof candidate.answerText === "string") {
-    patch.answerText = candidate.answerText;
+    const answerText = trimmedNonEmptyString(candidate.answerText);
+    if (answerText) {
+      patch.answerText = answerText;
+    }
   }
   if ("solutionText" in candidate && typeof candidate.solutionText === "string") {
-    patch.solutionText = candidate.solutionText;
+    patch.solutionText = nullableTrimmedString(candidate.solutionText);
   }
   if ("marks" in candidate && (typeof candidate.marks === "number" || candidate.marks === null)) {
     patch.marks = candidate.marks;
@@ -685,7 +691,16 @@ function candidatePatchFromReviewPayload(value: Prisma.JsonValue): Prisma.Questi
     patch.answerSourceBacked = true;
   }
   if ("difficulty" in candidate && typeof candidate.difficulty === "string") {
-    patch.difficulty = candidate.difficulty;
+    patch.difficulty = nullableTrimmedString(candidate.difficulty);
   }
   return patch;
+}
+
+function trimmedNonEmptyString(value: string) {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function nullableTrimmedString(value: string) {
+  return trimmedNonEmptyString(value) ?? null;
 }
