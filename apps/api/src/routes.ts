@@ -102,7 +102,12 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
           inputPayload: {
             sourcePaperId: sourcePaper.id,
             uploadObjectId: completedUpload.id,
-            objectKey: completedUpload.objectKey
+            objectKey: completedUpload.objectKey,
+            taskQueues: {
+              paperIngestion: config.TEMPORAL_TASK_QUEUE_PAPER_INGESTION,
+              ocr: config.TEMPORAL_TASK_QUEUE_OCR,
+              llm: config.TEMPORAL_TASK_QUEUE_LLM
+            }
           }
         }
       });
@@ -150,7 +155,12 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
           status: "PENDING",
           currentStep: "store_file",
           inputPayload: {
-            sourcePaperId: sourcePaper.id
+            sourcePaperId: sourcePaper.id,
+            taskQueues: {
+              paperIngestion: config.TEMPORAL_TASK_QUEUE_PAPER_INGESTION,
+              ocr: config.TEMPORAL_TASK_QUEUE_OCR,
+              llm: config.TEMPORAL_TASK_QUEUE_LLM
+            }
           }
         }
       });

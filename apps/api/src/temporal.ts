@@ -40,7 +40,15 @@ export async function startPaperIngestionWorkflow(
       workflowId,
       workflowIdConflictPolicy: WorkflowIdConflictPolicy.USE_EXISTING,
       workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
-      args: [input]
+      args: [
+        {
+          ...input,
+          taskQueues: {
+            ocr: config.TEMPORAL_TASK_QUEUE_OCR,
+            llm: config.TEMPORAL_TASK_QUEUE_LLM
+          }
+        }
+      ]
     });
   } catch (error) {
     if (error instanceof WorkflowExecutionAlreadyStartedError) {

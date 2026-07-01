@@ -30,10 +30,13 @@ export type PaperIngestionStep = (typeof paperIngestionSteps)[number];
 export interface PaperIngestionWorkflowInput {
   ingestionRunId: string;
   sourcePaperId: string;
+  taskQueues?: {
+    ocr: string;
+    llm: string;
+  };
 }
 
 export interface HumanReviewCompletedSignal {
   workflowRunId: string;
   reviewedBy?: string;
 }
-

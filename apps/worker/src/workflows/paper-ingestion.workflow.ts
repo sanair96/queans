@@ -18,28 +18,28 @@ const app = proxyActivities<typeof appActivities>({
   }
 });
 
-const ocr = proxyActivities<typeof ocrActivities>({
-  taskQueue: PAPER_OCR_TASK_QUEUE,
-  startToCloseTimeout: "20 minutes",
-  retry: {
-    maximumAttempts: 3
-  }
-});
-
-const llm = proxyActivities<typeof llmActivities>({
-  taskQueue: PAPER_LLM_TASK_QUEUE,
-  startToCloseTimeout: "20 minutes",
-  retry: {
-    maximumAttempts: 3
-  }
-});
-
 export const humanReviewCompleted = defineSignal<[HumanReviewCompletedSignal]>("humanReviewCompleted");
 
 export async function PaperIngestionWorkflow(input: PaperIngestionWorkflowInput) {
   let reviewSignalCount = 0;
   setHandler(humanReviewCompleted, () => {
     reviewSignalCount += 1;
+  });
+
+  const ocr = proxyActivities<typeof ocrActivities>({
+    taskQueue: input.taskQueues?.ocr ?? PAPER_OCR_TASK_QUEUE,
+    startToCloseTimeout: "20 minutes",
+    retry: {
+      maximumAttempts: 3
+    }
+  });
+
+  const llm = proxyActivities<typeof llmActivities>({
+    taskQueue: input.taskQueues?.llm ?? PAPER_LLM_TASK_QUEUE,
+    startToCloseTimeout: "20 minutes",
+    retry: {
+      maximumAttempts: 3
+    }
   });
 
   await app.recordStepStarted(input, "store_file");
@@ -72,4 +72,3 @@ export async function PaperIngestionWorkflow(input: PaperIngestionWorkflowInput)
 
   await app.markWorkflowCompleted(input);
 }
-
