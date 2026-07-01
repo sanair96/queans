@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 
 import { reviewPatchSchema, uploadCompleteSchema, uploadInitSchema } from "@queans/core";
 import { prisma } from "@queans/db";
@@ -17,11 +17,14 @@ interface IdParams {
 }
 
 export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
-  const r2 = new R2ObjectStore(loadR2ConfigFromEnv(process.env));
-
   app.get("/health", () => ({ ok: true }));
 
   app.post("/api/uploads/init", async (request, reply) => {
+    const r2 = getR2ObjectStoreOrReply(reply);
+    if (!r2) {
+      return reply;
+    }
+
     const input = uploadInitSchema.parse(request.body);
     const objectKey = buildSourcePaperObjectKey(input.fileName);
     const presigned = await r2.createPresignedPut({
@@ -49,6 +52,11 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
   });
 
   app.post<{ Params: IdParams }>("/api/uploads/:id/complete", async (request, reply) => {
+    const r2 = getR2ObjectStoreOrReply(reply);
+    if (!r2) {
+      return reply;
+    }
+
     const input = uploadCompleteSchema.parse(request.body);
     const paperContextPayload = input.paperContext === undefined ? null : toInputJson(input.paperContext);
     const upload = await prisma.uploadObject.findUnique({
@@ -317,6 +325,18 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
     await dispatchPendingWorkflowStarts(config);
     return { ok: true };
   });
+}
+
+function getR2ObjectStoreOrReply(reply: FastifyReply) {
+  try {
+    return new R2ObjectStore(loadR2ConfigFromEnv(process.env));
+  } catch (error) {
+    reply.code(503).send({
+      error: "R2_CONFIGURATION_ERROR",
+      message: error instanceof Error ? error.message : "R2 configuration is invalid"
+    });
+    return undefined;
+  }
 }
 
 function buildSourcePaperObjectKey(fileName: string) {

@@ -1,5 +1,3 @@
-import type { ReviewReasonCode } from "@queans/core";
-
 export interface OcrBlock {
   blockType: string;
   text: string;
@@ -57,7 +55,7 @@ export interface ExtractedQuestionCandidate {
   diagramAsset?: unknown;
   fieldConfidence: Record<string, number>;
   overallConfidence: number;
-  validationErrors: ReviewReasonCode[];
+  validationErrors: string[];
   sourceEvidence: unknown;
 }
 

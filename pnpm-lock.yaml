@@ -151,9 +151,6 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.729.0
         version: 3.1077.0
-      '@queans/core':
-        specifier: workspace:*
-        version: link:../core
       zod:
         specifier: ^3.24.1
         version: 3.25.76
