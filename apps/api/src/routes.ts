@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 import { reviewPatchSchema, uploadCompleteSchema, uploadInitSchema } from "@queans/core";
-import { Prisma, prisma } from "@queans/db";
+import { Prisma, prisma, WorkflowStatus } from "@queans/db";
 import { loadR2ConfigFromEnv, R2ObjectStore } from "@queans/providers";
 
 import type { UploadCompleteInput } from "@queans/core";
@@ -166,9 +166,27 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
   });
 
   app.post<{ Params: IdParams }>("/api/papers/:id/ingestions", async (request, reply) => {
-    const sourcePaper = await prisma.sourcePaper.findUnique({ where: { id: request.params.id } });
+    const [sourcePaper, activeRun] = await Promise.all([
+      prisma.sourcePaper.findUnique({ where: { id: request.params.id } }),
+      prisma.workflowRun.findFirst({
+        where: {
+          sourcePaperId: request.params.id,
+          workflowType: "PAPER_INGESTION",
+          status: { in: activeIngestionStatuses() }
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          status: true
+        }
+      })
+    ]);
     if (!sourcePaper) {
       return reply.code(404).send({ error: "SOURCE_PAPER_NOT_FOUND" });
+    }
+
+    if (activeRun) {
+      return reply.code(202).send(ingestionQueuedPayload(activeRun));
     }
 
     const workflowRun = await prisma.$transaction(async (tx) => {
@@ -394,6 +412,21 @@ async function findUploadCompletionPayload(uploadId: string) {
 
 export function isPrismaUniqueConstraintError(error: unknown) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
+export function activeIngestionStatuses() {
+  return [WorkflowStatus.PENDING, WorkflowStatus.RUNNING, WorkflowStatus.WAITING_FOR_REVIEW];
+}
+
+export function isActiveIngestionStatus(status: string) {
+  return activeIngestionStatuses().some((activeStatus) => activeStatus === status);
+}
+
+export function ingestionQueuedPayload(workflowRun: { id: string; status: string }) {
+  return {
+    ingestionRunId: workflowRun.id,
+    status: workflowRun.status === WorkflowStatus.PENDING ? "QUEUED" : workflowRun.status
+  };
 }
 
 function reviewStatusForDecision(decision: string) {

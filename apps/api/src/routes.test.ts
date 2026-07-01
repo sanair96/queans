@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { Prisma } from "@queans/db";
 
-import { isPrismaUniqueConstraintError, uploadCompletionPayload } from "./routes.js";
+import {
+  ingestionQueuedPayload,
+  isActiveIngestionStatus,
+  isPrismaUniqueConstraintError,
+  uploadCompletionPayload
+} from "./routes.js";
 
 describe("uploadCompletionPayload", () => {
   it("returns the latest ingestion run for an already completed upload", () => {
@@ -56,5 +61,35 @@ describe("isPrismaUniqueConstraintError", () => {
         })
       )
     ).toBe(false);
+  });
+});
+
+describe("isActiveIngestionStatus", () => {
+  it("treats unfinished ingestion statuses as active", () => {
+    expect(isActiveIngestionStatus("PENDING")).toBe(true);
+    expect(isActiveIngestionStatus("RUNNING")).toBe(true);
+    expect(isActiveIngestionStatus("WAITING_FOR_REVIEW")).toBe(true);
+  });
+
+  it("does not treat terminal ingestion statuses as active", () => {
+    expect(isActiveIngestionStatus("COMPLETED")).toBe(false);
+    expect(isActiveIngestionStatus("FAILED")).toBe(false);
+    expect(isActiveIngestionStatus("CANCELLED")).toBe(false);
+  });
+});
+
+describe("ingestionQueuedPayload", () => {
+  it("maps pending workflow runs to the public queued status", () => {
+    expect(ingestionQueuedPayload({ id: "run-1", status: "PENDING" })).toEqual({
+      ingestionRunId: "run-1",
+      status: "QUEUED"
+    });
+  });
+
+  it("returns active non-pending workflow statuses unchanged", () => {
+    expect(ingestionQueuedPayload({ id: "run-1", status: "WAITING_FOR_REVIEW" })).toEqual({
+      ingestionRunId: "run-1",
+      status: "WAITING_FOR_REVIEW"
+    });
   });
 });
