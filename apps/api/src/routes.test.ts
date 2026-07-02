@@ -93,6 +93,23 @@ describe("paperIngestionInputPayload", () => {
       }
     });
   });
+
+  it("includes retry-import metadata only for batch import retry attempts", () => {
+    expect(
+      paperIngestionInputPayload({
+        sourcePaperId: "source-paper-1",
+        uploadObjectId: "upload-1",
+        objectKey: "source-papers/2026-07-02/paper.pdf",
+        paperContext: null,
+        retryImportBatchJobId: "batch-job-1",
+        retryImportOperation: "question_solving",
+        config: apiConfig
+      })
+    ).toMatchObject({
+      retryImportBatchJobId: "batch-job-1",
+      retryImportOperation: "question_solving"
+    });
+  });
 });
 
 describe("paperContextPayloadFromSourcePaper", () => {

@@ -10,9 +10,15 @@ export function paperIngestionWorkflowId(ingestionRunId: string) {
 
 export const paperIngestionSteps = [
   "store_file",
-  "run_ocr",
+  "submit_ocr_batch",
+  "import_ocr_batch",
   "parse_ocr_layout",
+  "submit_segmentation_batch",
+  "import_segmentation_batch",
+  "submit_solving_batch",
+  "import_solving_batch",
   "segment_questions",
+  "run_ocr",
   "extract_question_candidates",
   "enrich_with_topics_and_answers",
   "validate_candidates",
@@ -30,6 +36,8 @@ export type PaperIngestionStep = (typeof paperIngestionSteps)[number];
 export interface PaperIngestionWorkflowInput {
   ingestionRunId: string;
   sourcePaperId: string;
+  retryImportBatchJobId?: string | undefined;
+  retryImportOperation?: "ocr" | "question_segmentation" | "question_solving" | undefined;
   taskQueues?: {
     ocr: string;
     llm: string;

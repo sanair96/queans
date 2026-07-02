@@ -9,7 +9,7 @@ import {
   uploadCompleteSchema,
   uploadInitSchema
 } from "@queans/core";
-import { Prisma, prisma, ReviewStatus, WorkflowStatus } from "@queans/db";
+import { Prisma, prisma, ProviderBatchJobStatus, ReviewStatus, WorkflowStatus } from "@queans/db";
 import { loadR2ConfigFromEnv, R2ObjectStore, type StoredObjectHead } from "@queans/providers";
 
 import type { ReviewPatchInput, ReviewReasonCode, UploadCompleteInput } from "@queans/core";
@@ -253,6 +253,72 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
     return reply.code(202).send(ingestionQueuedPayload(ingestion.workflowRun));
   });
 
+  app.get("/api/ingestions", async (request) => {
+    const query = ingestionListQuery(request.query);
+    const runs = await prisma.workflowRun.findMany({
+      where: ingestionListWhere(query),
+      include: {
+        sourcePaper: {
+          include: {
+            _count: {
+              select: {
+                questionCandidates: true,
+                reviewItems: true,
+                ocrPages: true
+              }
+            }
+          }
+        },
+        steps: {
+          orderBy: { startedAt: "desc" },
+          take: 1
+        },
+        providerRunCosts: true,
+        providerBatchJobs: {
+          orderBy: { createdAt: "desc" },
+          take: 3
+        },
+        _count: {
+          select: {
+            reviewItems: true
+          }
+        }
+      },
+      orderBy: { createdAt: "desc" },
+      take: query.limit + 1,
+      skip: query.offset
+    });
+    const page = runs.slice(0, query.limit);
+
+    return {
+      runs: page.map((run) => ({
+        id: run.id,
+        status: run.status,
+        currentStep: run.currentStep,
+        createdAt: run.createdAt,
+        updatedAt: run.updatedAt,
+        completedAt: run.completedAt,
+        sourcePaperId: run.sourcePaperId,
+        retryOfWorkflowRunId: run.retryOfWorkflowRunId,
+        sourcePaper: run.sourcePaper
+          ? {
+              id: run.sourcePaper.id,
+              title: run.sourcePaper.title,
+              sourceFileName: run.sourcePaper.sourceFileName,
+              status: run.sourcePaper.status
+            }
+          : null,
+        latestStep: run.steps[0] ?? null,
+        latestBatchJob: run.providerBatchJobs[0] ?? null,
+        counts: run.sourcePaper
+          ? ingestionRunCounts(run.sourcePaper._count, run._count.reviewItems)
+          : undefined,
+        estimatedCostUsd: totalEstimatedCostForRun(run.providerRunCosts)
+      })),
+      nextOffset: runs.length > query.limit ? query.offset + query.limit : null
+    };
+  });
+
   app.get<{ Params: IdParams }>("/api/ingestions/:id", async (request, reply) => {
     const workflowRun = await prisma.workflowRun.findUnique({
       where: { id: request.params.id },
@@ -265,6 +331,24 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
         steps: { orderBy: { startedAt: "asc" } },
         events: { orderBy: { createdAt: "asc" }, take: 50 },
         providerRunCosts: { orderBy: { createdAt: "asc" } },
+        providerBatchJobs: { orderBy: { createdAt: "asc" } },
+        retryOfWorkflowRun: {
+          select: {
+            id: true,
+            status: true,
+            currentStep: true,
+            createdAt: true
+          }
+        },
+        retryAttempts: {
+          select: {
+            id: true,
+            status: true,
+            currentStep: true,
+            createdAt: true
+          },
+          orderBy: { createdAt: "desc" }
+        },
         sourcePaper: {
           include: {
             _count: {
@@ -288,6 +372,8 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
       status: workflowRun.status,
       currentStep: workflowRun.currentStep,
       sourcePaperId: workflowRun.sourcePaperId,
+      retryOfWorkflowRun: workflowRun.retryOfWorkflowRun,
+      retryAttempts: workflowRun.retryAttempts,
       outputPayload: workflowRun.outputPayload,
       errorPayload: workflowRun.errorPayload,
       failureSummary: ingestionFailureSummary({
@@ -300,8 +386,81 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
         : undefined,
       steps: workflowRun.steps,
       events: workflowRun.events,
-      costs: workflowRun.providerRunCosts
+      costs: workflowRun.providerRunCosts,
+      providerBatchJobs: workflowRun.providerBatchJobs
     };
+  });
+
+  app.post<{ Params: IdParams }>("/api/ingestions/:id/retry", async (request, reply) => {
+    const force = retryForceFromBody(request.body);
+    const run = await prisma.workflowRun.findUnique({
+      where: { id: request.params.id },
+      include: {
+        sourcePaper: {
+          include: { uploadObject: true }
+        }
+      }
+    });
+
+    if (!run?.sourcePaper) {
+      return reply.code(404).send({ error: "INGESTION_RUN_NOT_FOUND" });
+    }
+    if (!canRetryWorkflowRun(run.status, force)) {
+      return reply.code(409).send({ error: "INGESTION_RUN_NOT_RETRYABLE", status: run.status });
+    }
+
+    const activeRun = await activeIngestionRunForSourcePaper(run.sourcePaper.id);
+    if (activeRun) {
+      return reply.code(409).send({ error: "SOURCE_PAPER_INGESTION_ALREADY_ACTIVE", ingestionRunId: activeRun.id });
+    }
+
+    const retryRun = await createRetryWorkflowRun({
+      sourcePaper: run.sourcePaper,
+      config,
+      retryOfWorkflowRunId: run.id
+    });
+    dispatchPendingWorkflowStarts(config).catch((error: unknown) => {
+      request.log.error({ error }, "Workflow dispatch failed after ingestion retry");
+    });
+
+    return reply.code(202).send(ingestionQueuedPayload(retryRun));
+  });
+
+  app.post<{ Params: IdParams }>("/api/provider-batch-jobs/:id/retry-import", async (request, reply) => {
+    const batchJob = await prisma.providerBatchJob.findUnique({
+      where: { id: request.params.id },
+      include: {
+        workflowRun: true,
+        sourcePaper: {
+          include: { uploadObject: true }
+        }
+      }
+    });
+
+    if (!batchJob?.sourcePaper) {
+      return reply.code(404).send({ error: "PROVIDER_BATCH_JOB_NOT_FOUND" });
+    }
+    if (!canRetryBatchImport(batchJob)) {
+      return reply.code(409).send({ error: "PROVIDER_BATCH_JOB_IMPORT_NOT_RETRYABLE", status: batchJob.status });
+    }
+
+    const activeRun = await activeIngestionRunForSourcePaper(batchJob.sourcePaper.id);
+    if (activeRun) {
+      return reply.code(409).send({ error: "SOURCE_PAPER_INGESTION_ALREADY_ACTIVE", ingestionRunId: activeRun.id });
+    }
+
+    const retryRun = await createRetryWorkflowRun({
+      sourcePaper: batchJob.sourcePaper,
+      config,
+      retryOfWorkflowRunId: batchJob.workflowRunId,
+      retryImportBatchJobId: batchJob.id,
+      retryImportOperation: providerBatchRetryOperation(batchJob.operation)
+    });
+    dispatchPendingWorkflowStarts(config).catch((error: unknown) => {
+      request.log.error({ error }, "Workflow dispatch failed after provider batch import retry");
+    });
+
+    return reply.code(202).send(ingestionQueuedPayload(retryRun));
   });
 
   app.get("/api/review/tasks", async () => {
@@ -476,12 +635,14 @@ export function paperIngestionInputPayload(input: {
   uploadObjectId: string;
   objectKey: string;
   paperContext: Prisma.InputJsonValue | null;
+  retryImportBatchJobId?: string | undefined;
+  retryImportOperation?: "ocr" | "question_segmentation" | "question_solving" | undefined;
   config: Pick<
     ApiConfig,
     "TEMPORAL_TASK_QUEUE_PAPER_INGESTION" | "TEMPORAL_TASK_QUEUE_OCR" | "TEMPORAL_TASK_QUEUE_LLM"
   >;
 }) {
-  return {
+  const payload = {
     sourcePaperId: input.sourcePaperId,
     uploadObjectId: input.uploadObjectId,
     objectKey: input.objectKey,
@@ -492,6 +653,15 @@ export function paperIngestionInputPayload(input: {
       llm: input.config.TEMPORAL_TASK_QUEUE_LLM
     }
   };
+  if (input.retryImportBatchJobId && input.retryImportOperation) {
+    return {
+      ...payload,
+      retryImportBatchJobId: input.retryImportBatchJobId,
+      retryImportOperation: input.retryImportOperation
+    };
+  }
+
+  return payload;
 }
 
 export function paperContextPayloadFromSourcePaper(sourcePaper: {
@@ -580,6 +750,180 @@ export function isPrismaUniqueConstraintError(error: unknown) {
 
 export function activeIngestionStatuses() {
   return [WorkflowStatus.PENDING, WorkflowStatus.RUNNING, WorkflowStatus.WAITING_FOR_REVIEW];
+}
+
+function ingestionListQuery(query: unknown) {
+  const record = query && typeof query === "object" && !Array.isArray(query) ? (query as Record<string, unknown>) : {};
+  const limit = boundedQueryInteger(record.limit, 25, 1, 100);
+  const offset = boundedQueryInteger(record.offset, 0, 0, 10_000);
+  return {
+    limit,
+    offset,
+    status: stringQuery(record.status),
+    sourcePaperId: stringQuery(record.sourcePaperId),
+    operation: stringQuery(record.operation)
+  };
+}
+
+function ingestionListWhere(query: ReturnType<typeof ingestionListQuery>) {
+  return {
+    workflowType: "PAPER_INGESTION",
+    ...(query.status && isWorkflowStatus(query.status) ? { status: query.status } : {}),
+    ...(query.sourcePaperId ? { sourcePaperId: query.sourcePaperId } : {}),
+    ...(query.operation
+      ? {
+          providerBatchJobs: {
+            some: {
+              operation: query.operation
+            }
+          }
+        }
+      : {})
+  } satisfies Prisma.WorkflowRunWhereInput;
+}
+
+function totalEstimatedCostForRun(costs: Array<{ estimatedCostUsd: Prisma.Decimal | null }>) {
+  let total = new Prisma.Decimal(0);
+  let hasCost = false;
+  for (const cost of costs) {
+    if (cost.estimatedCostUsd === null) {
+      continue;
+    }
+    total = total.add(cost.estimatedCostUsd);
+    hasCost = true;
+  }
+
+  return hasCost ? total.toFixed(6) : null;
+}
+
+async function activeIngestionRunForSourcePaper(sourcePaperId: string) {
+  return prisma.workflowRun.findFirst({
+    where: {
+      sourcePaperId,
+      workflowType: "PAPER_INGESTION",
+      status: { in: activeIngestionStatuses() }
+    },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      status: true
+    }
+  });
+}
+
+async function createRetryWorkflowRun(input: {
+  sourcePaper: {
+    id: string;
+    uploadObjectId: string;
+    uploadObject: {
+      objectKey: string;
+    };
+    title: string | null;
+    board: string | null;
+    classLevel: string | null;
+    subject: string | null;
+    year: number | null;
+    schoolName: string | null;
+    examType: string | null;
+    uploadedBy: string | null;
+    metadata: Prisma.JsonValue;
+  };
+  config: ApiConfig;
+  retryOfWorkflowRunId: string;
+  retryImportBatchJobId?: string | undefined;
+  retryImportOperation?: "ocr" | "question_segmentation" | "question_solving" | undefined;
+}) {
+  return prisma.$transaction(async (tx) => {
+    await tx.sourcePaper.update({
+      where: { id: input.sourcePaper.id },
+      data: { status: "QUEUED" }
+    });
+    const run = await tx.workflowRun.create({
+      data: {
+        workflowType: "PAPER_INGESTION",
+        entityId: input.sourcePaper.id,
+        sourcePaperId: input.sourcePaper.id,
+        retryOfWorkflowRunId: input.retryOfWorkflowRunId,
+        status: "PENDING",
+        currentStep: "store_file",
+        inputPayload: paperIngestionInputPayload({
+          sourcePaperId: input.sourcePaper.id,
+          uploadObjectId: input.sourcePaper.uploadObjectId,
+          objectKey: input.sourcePaper.uploadObject.objectKey,
+          paperContext: paperContextPayloadFromSourcePaper(input.sourcePaper),
+          retryImportBatchJobId: input.retryImportBatchJobId,
+          retryImportOperation: input.retryImportOperation,
+          config: input.config
+        })
+      }
+    });
+    await tx.workflowStartOutbox.create({ data: { workflowRunId: run.id } });
+    await tx.workflowEvent.create({
+      data: {
+        workflowRunId: run.id,
+        eventType: input.retryImportBatchJobId ? "BATCH_IMPORT_RETRY_QUEUED" : "WORKFLOW_RETRY_QUEUED",
+        eventPayload: toInputJson({
+          retryOfWorkflowRunId: input.retryOfWorkflowRunId,
+          retryImportBatchJobId: input.retryImportBatchJobId,
+          retryImportOperation: input.retryImportOperation
+        })
+      }
+    });
+    return run;
+  });
+}
+
+function canRetryWorkflowRun(status: WorkflowStatus, force: boolean) {
+  if (status === WorkflowStatus.FAILED || status === WorkflowStatus.CANCELLED) {
+    return true;
+  }
+
+  return force && status === WorkflowStatus.COMPLETED;
+}
+
+function canRetryBatchImport(batchJob: {
+  status: ProviderBatchJobStatus;
+  outputFileId: string | null;
+  operation: string;
+}) {
+  return (
+    Boolean(batchJob.outputFileId) &&
+    (batchJob.status === ProviderBatchJobStatus.IMPORT_FAILED ||
+      batchJob.status === ProviderBatchJobStatus.SUCCEEDED ||
+      batchJob.status === ProviderBatchJobStatus.IMPORTED) &&
+    (batchJob.operation === "ocr" ||
+      batchJob.operation === "question_segmentation" ||
+      batchJob.operation === "question_solving")
+  );
+}
+
+function providerBatchRetryOperation(operation: string) {
+  if (operation === "ocr" || operation === "question_segmentation" || operation === "question_solving") {
+    return operation;
+  }
+
+  throw new Error(`Unsupported provider batch operation: ${operation}`);
+}
+
+function retryForceFromBody(body: unknown) {
+  return Boolean(body && typeof body === "object" && !Array.isArray(body) && (body as Record<string, unknown>).force === true);
+}
+
+function boundedQueryInteger(value: unknown, fallback: number, min: number, max: number) {
+  const parsed = typeof value === "string" ? Number(value) : typeof value === "number" ? value : fallback;
+  if (!Number.isInteger(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function stringQuery(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isWorkflowStatus(value: string): value is WorkflowStatus {
+  return Object.values(WorkflowStatus).some((status) => status === value);
 }
 
 export function sourcePaperCanQueueIngestionWhere(id: string) {

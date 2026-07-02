@@ -14,7 +14,8 @@ describe("provider cost estimation", () => {
       estimateMistralOcrCostUsd(12, {
         mistralOcrUsdPer1000Pages: 4,
         mistralExtractorInputUsdPerMillionTokens: 0.15,
-        mistralExtractorOutputUsdPerMillionTokens: 0.6
+        mistralExtractorOutputUsdPerMillionTokens: 0.6,
+        mistralBatchDiscountRatio: 0.5
       })
     ).toBe(0.048);
   });
@@ -29,7 +30,8 @@ describe("provider cost estimation", () => {
         {
           mistralOcrUsdPer1000Pages: 4,
           mistralExtractorInputUsdPerMillionTokens: 0.15,
-          mistralExtractorOutputUsdPerMillionTokens: 0.6
+          mistralExtractorOutputUsdPerMillionTokens: 0.6,
+          mistralBatchDiscountRatio: 0.5
         }
       )
     ).toBe(0.00045);
@@ -49,7 +51,8 @@ describe("provider cost estimation", () => {
     ).toEqual({
       mistralOcrUsdPer1000Pages: 2,
       mistralExtractorInputUsdPerMillionTokens: 0.1,
-      mistralExtractorOutputUsdPerMillionTokens: 0.3
+      mistralExtractorOutputUsdPerMillionTokens: 0.3,
+      mistralBatchDiscountRatio: 0.5
     });
 
     expect(() =>

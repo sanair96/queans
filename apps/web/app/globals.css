@@ -260,6 +260,18 @@ h2 {
   color: var(--ink);
 }
 
+.link-button {
+  display: inline-flex;
+  width: max-content;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+  cursor: pointer;
+  font-weight: 700;
+  text-align: left;
+}
+
 .btn:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -516,6 +528,38 @@ h2 {
 .run-lookup {
   display: grid;
   gap: 16px;
+}
+
+.runs-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.runs-toolbar select {
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  padding: 0 10px;
+}
+
+.runs-table td > span,
+.runs-table td > strong {
+  display: block;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.retry-list {
+  display: grid;
+  gap: 8px;
 }
 
 .lookup-form {

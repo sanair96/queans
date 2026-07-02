@@ -7,6 +7,15 @@ export interface OcrBlock {
   rawJson?: unknown;
 }
 
+export interface OcrImage {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  base64: string;
+  boundingBox?: unknown;
+  rawJson?: unknown;
+}
+
 export interface OcrPage {
   pageNumber: number;
   markdown: string;
@@ -18,6 +27,7 @@ export interface OcrPage {
   dpi?: number | undefined;
   rawJson: unknown;
   blocks: OcrBlock[];
+  images: OcrImage[];
 }
 
 export interface OcrResult {

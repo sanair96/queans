@@ -4,6 +4,7 @@ export interface ProviderPricing {
   mistralOcrUsdPer1000Pages: number;
   mistralExtractorInputUsdPerMillionTokens: number;
   mistralExtractorOutputUsdPerMillionTokens: number;
+  mistralBatchDiscountRatio: number;
 }
 
 export interface ProviderRunCostInput {
@@ -21,7 +22,8 @@ export interface ProviderRunCostInput {
 export const defaultProviderPricing: ProviderPricing = {
   mistralOcrUsdPer1000Pages: 4,
   mistralExtractorInputUsdPerMillionTokens: 0.15,
-  mistralExtractorOutputUsdPerMillionTokens: 0.6
+  mistralExtractorOutputUsdPerMillionTokens: 0.6,
+  mistralBatchDiscountRatio: 0.5
 };
 
 export function loadProviderPricing(env: NodeJS.ProcessEnv): ProviderPricing {
@@ -40,7 +42,8 @@ export function loadProviderPricing(env: NodeJS.ProcessEnv): ProviderPricing {
       env,
       "MISTRAL_EXTRACTOR_OUTPUT_USD_PER_MILLION_TOKENS",
       defaultProviderPricing.mistralExtractorOutputUsdPerMillionTokens
-    )
+    ),
+    mistralBatchDiscountRatio: envNumber(env, "MISTRAL_BATCH_DISCOUNT_RATIO", defaultProviderPricing.mistralBatchDiscountRatio)
   };
 }
 
@@ -60,6 +63,10 @@ export function estimateMistralExtractorCostUsd(
   const outputCost =
     ((usage.completionTokens ?? 0) / 1_000_000) * pricing.mistralExtractorOutputUsdPerMillionTokens;
   return roundUsd(inputCost + outputCost);
+}
+
+export function applyBatchDiscount(value: number, pricing: ProviderPricing) {
+  return roundUsd(value * pricing.mistralBatchDiscountRatio);
 }
 
 export function formatCostDecimal(value: number) {

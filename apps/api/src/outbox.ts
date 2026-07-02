@@ -5,6 +5,8 @@ import type { ApiConfig } from "./config.js";
 import { startPaperIngestionWorkflow } from "./temporal.js";
 import type { StartedPaperIngestionWorkflow } from "./temporal.js";
 
+type RetryImportOperation = "ocr" | "question_segmentation" | "question_solving";
+
 export const WORKFLOW_DISPATCH_MAX_ATTEMPTS = 12;
 export const WORKFLOW_DISPATCH_STALE_LOCK_MS = 5 * 60 * 1000;
 
@@ -114,7 +116,8 @@ export async function dispatchPendingWorkflowStarts(config: ApiConfig, limit = 1
 
       const startedWorkflow = await startPaperIngestionWorkflow(config, {
         ingestionRunId: item.workflowRunId,
-        sourcePaperId: item.workflowRun.sourcePaperId
+        sourcePaperId: item.workflowRun.sourcePaperId,
+        ...retryImportInputFromPayload(item.workflowRun.inputPayload)
       });
 
       await prisma.$transaction([
@@ -145,6 +148,33 @@ export async function dispatchPendingWorkflowStarts(config: ApiConfig, limit = 1
       });
     }
   }
+}
+
+function retryImportInputFromPayload(value: Prisma.JsonValue): {
+  retryImportBatchJobId?: string | undefined;
+  retryImportOperation?: RetryImportOperation | undefined;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const record = value as Record<string, unknown>;
+  const retryImportOperation = record.retryImportOperation;
+  if (
+    typeof record.retryImportBatchJobId === "string" &&
+    isRetryImportOperation(retryImportOperation)
+  ) {
+    return {
+      retryImportBatchJobId: record.retryImportBatchJobId,
+      retryImportOperation
+    };
+  }
+
+  return {};
+}
+
+function isRetryImportOperation(value: unknown): value is RetryImportOperation {
+  return value === "ocr" || value === "question_segmentation" || value === "question_solving";
 }
 
 export function startOutboxDispatcher(config: ApiConfig) {

@@ -2,7 +2,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import * as React from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { FailureDiagnosis, formatEstimatedCostUsd, totalEstimatedCostUsd } from "./run-lookup";
+import {
+  FailureDiagnosis,
+  formatEstimatedCostUsd,
+  isBatchImportRetryable,
+  isRunRetryable,
+  shortId,
+  totalEstimatedCostUsd
+} from "./run-lookup";
 
 vi.stubGlobal("React", React);
 
@@ -86,5 +93,25 @@ describe("provider cost helpers", () => {
     expect(formatEstimatedCostUsd("0.004750")).toBe("<$0.01");
     expect(formatEstimatedCostUsd("1.236000")).toBe("$1.24");
     expect(formatEstimatedCostUsd(null)).toBe("-");
+  });
+});
+
+describe("run operator helpers", () => {
+  it("shortens ids for dense run tables", () => {
+    expect(shortId("1234567890abcdef")).toBe("12345678");
+    expect(shortId(null)).toBe("-");
+  });
+
+  it("allows retry actions only for terminal failed runs", () => {
+    expect(isRunRetryable("FAILED")).toBe(true);
+    expect(isRunRetryable("CANCELLED")).toBe(true);
+    expect(isRunRetryable("RUNNING")).toBe(false);
+    expect(isRunRetryable("COMPLETED")).toBe(false);
+  });
+
+  it("allows batch import retries when an output file is available", () => {
+    expect(isBatchImportRetryable({ status: "IMPORT_FAILED", outputFileId: "file-out" })).toBe(true);
+    expect(isBatchImportRetryable({ status: "SUCCEEDED", outputFileId: "file-out" })).toBe(true);
+    expect(isBatchImportRetryable({ status: "FAILED", outputFileId: null })).toBe(false);
   });
 });

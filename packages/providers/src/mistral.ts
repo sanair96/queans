@@ -1,25 +1,63 @@
 import { z } from "zod";
 
-import type { ExtractedQuestionCandidate, OcrPage, OcrResult, QuestionExtractionResult } from "./types.js";
+import type { ExtractedQuestionCandidate, OcrImage, OcrPage, OcrResult, QuestionExtractionResult } from "./types.js";
 
 export interface MistralConfig {
   apiKey: string;
   ocrModel: string;
   extractorModel: string;
+  segmentationModel: string;
+  solverModel: string;
 }
 
 export function loadMistralConfigFromEnv(env: NodeJS.ProcessEnv): MistralConfig {
+  const extractorModel = env.EXTRACTOR_MODEL?.trim() || "mistral-small-latest";
   return {
     apiKey: requiredEnv(env, "MISTRAL_API_KEY"),
     ocrModel: env.MISTRAL_OCR_MODEL?.trim() || "mistral-ocr-latest",
-    extractorModel: env.EXTRACTOR_MODEL?.trim() || "mistral-small-latest"
+    extractorModel,
+    segmentationModel: env.MISTRAL_SEGMENTATION_MODEL?.trim() || extractorModel,
+    solverModel: env.MISTRAL_SOLVER_MODEL?.trim() || "mistral-large-latest"
   };
+}
+
+export const mistralBatchEndpoints = ["/v1/ocr", "/v1/chat/completions"] as const;
+
+export type MistralBatchEndpoint = (typeof mistralBatchEndpoints)[number];
+
+export interface MistralBatchLine {
+  custom_id: string;
+  body: unknown;
+}
+
+export interface MistralBatchJob {
+  id: string;
+  status: string;
+  model?: string | undefined;
+  endpoint?: string | undefined;
+  inputFiles: string[];
+  outputFile?: string | undefined;
+  errorFile?: string | undefined;
+  totalRequests?: number | undefined;
+  succeededRequests?: number | undefined;
+  failedRequests?: number | undefined;
+  rawJson: unknown;
+}
+
+export interface MistralBatchResultLine {
+  id?: string | undefined;
+  customId: string;
+  statusCode?: number | undefined;
+  body?: unknown;
+  error?: unknown;
+  rawJson: unknown;
 }
 
 const mistralOcrPageSchema = z.object({
   index: z.number(),
   markdown: z.string(),
   images: z.array(z.unknown()).optional(),
+  blocks: z.array(z.unknown()).optional(),
   tables: z.array(z.unknown()).optional(),
   dimensions: z
     .object({
@@ -36,6 +74,46 @@ const mistralOcrPageSchema = z.object({
     .nullable()
     .optional()
 });
+
+const mistralBatchUploadSchema = z.object({
+  id: z.string()
+});
+
+const mistralBatchJobSchema = z
+  .object({
+    id: z.string(),
+    status: z.string(),
+    model: z.string().optional(),
+    endpoint: z.string().optional(),
+    input_files: z.array(z.string()).optional(),
+    inputFiles: z.array(z.string()).optional(),
+    output_file: z.string().nullable().optional(),
+    outputFile: z.string().nullable().optional(),
+    error_file: z.string().nullable().optional(),
+    errorFile: z.string().nullable().optional(),
+    total_requests: z.number().optional(),
+    totalRequests: z.number().optional(),
+    succeeded_requests: z.number().optional(),
+    succeededRequests: z.number().optional(),
+    failed_requests: z.number().optional(),
+    failedRequests: z.number().optional()
+  })
+  .passthrough();
+
+const mistralBatchResultLineSchema = z
+  .object({
+    id: z.string().optional(),
+    custom_id: z.string(),
+    response: z
+      .object({
+        status_code: z.number().optional(),
+        body: z.unknown().optional()
+      })
+      .nullable()
+      .optional(),
+    error: z.unknown().nullable().optional()
+  })
+  .passthrough();
 
 const mistralOcrResponseSchema = z.object({
   pages: z.array(mistralOcrPageSchema),
@@ -78,6 +156,10 @@ const extractionCandidateSchema = z.object({
 
 const extractionResponseSchema = z.object({
   candidates: z.array(extractionCandidateSchema)
+});
+
+const solvingResponseSchema = z.object({
+  candidate: extractionCandidateSchema
 });
 
 const extractionValidationReasonCodes = [
@@ -163,6 +245,18 @@ const extractionResponseJsonSchema = {
   }
 } as const;
 
+const questionSegmentationJsonSchema = extractionResponseJsonSchema;
+
+const questionSolvingJsonSchema = {
+  title: "SolvedQuestionCandidate",
+  type: "object",
+  additionalProperties: false,
+  required: ["candidate"],
+  properties: {
+    candidate: extractionResponseJsonSchema.properties.candidates.items
+  }
+} as const;
+
 const chatCompletionSchema = z.object({
   choices: z.array(
     z.object({
@@ -192,19 +286,132 @@ export class MistralOcrProvider {
       },
       confidence_scores_granularity: "word",
       table_format: "markdown",
-      include_image_base64: false
+      include_image_base64: true
     });
-    const parsed = mistralOcrResponseSchema.parse(raw);
+    return parseMistralOcrResult(raw);
+  }
+}
+
+export class MistralBatchProvider {
+  constructor(private readonly config: MistralConfig) {}
+
+  buildOcrBatchLine(input: { customId: string; documentUrl: string }): MistralBatchLine {
     return {
-      provider: "MISTRAL",
-      model: parsed.model,
-      pages: parsed.pages.map(normalizeMistralPage),
-      usage: {
-        pagesProcessed: parsed.usage_info?.pages_processed,
-        docSizeBytes: parsed.usage_info?.doc_size_bytes
-      },
-      rawJson: raw
+      custom_id: input.customId,
+      body: {
+        document: {
+          type: "document_url",
+          document_url: input.documentUrl
+        },
+        confidence_scores_granularity: "word",
+        table_format: "markdown",
+        include_image_base64: true
+      }
     };
+  }
+
+  buildSegmentationBatchLine(input: { customId: string; pages: OcrPage[] }): MistralBatchLine {
+    return {
+      custom_id: input.customId,
+      body: {
+        temperature: 0,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "question_segments",
+            strict: true,
+            schema: questionSegmentationJsonSchema
+          }
+        },
+        messages: [
+          {
+            role: "system",
+            content:
+              "Segment OCR markdown into question candidates only. Do not answer or solve. Return JSON matching the schema. Keep each segment grounded in contiguous source pages and include every visible question, sub-question, mark, option, and diagram reference."
+          },
+          {
+            role: "user",
+            content: buildExtractionPrompt(input.pages)
+          }
+        ]
+      }
+    };
+  }
+
+  buildSolvingBatchLine(input: {
+    customId: string;
+    candidate: ExtractedQuestionCandidate;
+    imageUrls: Array<{ url: string; label: string }>;
+  }): MistralBatchLine {
+    const content: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: string }> = [
+      {
+        type: "text",
+        text: buildSolvingPrompt(input.candidate, input.imageUrls)
+      },
+      ...input.imageUrls.map((image) => ({
+        type: "image_url" as const,
+        image_url: image.url
+      }))
+    ];
+
+    return {
+      custom_id: input.customId,
+      body: {
+        temperature: 0,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "solved_question_candidate",
+            strict: true,
+            schema: questionSolvingJsonSchema
+          }
+        },
+        messages: [
+          {
+            role: "system",
+            content:
+              "Repair incomplete OCR-grounded questions only when the source evidence supports the repair, then solve. If the question, answer, or diagram is too incomplete or uncertain, keep the uncertainty explicit with validation_errors. Return JSON matching the schema."
+          },
+          {
+            role: "user",
+            content
+          }
+        ]
+      }
+    };
+  }
+
+  async uploadBatchJsonl(input: { fileName: string; lines: MistralBatchLine[] }) {
+    const form = new FormData();
+    form.append("purpose", "batch");
+    form.append("file", new Blob([toJsonl(input.lines)], { type: "application/jsonl" }), input.fileName);
+    const raw = await callMistralForm(this.config.apiKey, "/v1/files", form);
+    return mistralBatchUploadSchema.parse(raw).id;
+  }
+
+  async createBatchJob(input: {
+    inputFileId: string;
+    endpoint: MistralBatchEndpoint;
+    model: string;
+    metadata?: Record<string, string> | undefined;
+  }) {
+    const raw = await callMistral(this.config.apiKey, "/v1/batch/jobs", {
+      input_files: [input.inputFileId],
+      endpoint: input.endpoint,
+      model: input.model,
+      metadata: input.metadata
+    });
+    return normalizeMistralBatchJob(raw);
+  }
+
+  async retrieveBatchJob(providerJobId: string) {
+    const raw = await getMistral(this.config.apiKey, `/v1/batch/jobs/${providerJobId}`);
+    return normalizeMistralBatchJob(raw);
+  }
+
+  async downloadBatchResultFile(fileId: string) {
+    const content = await getMistralText(this.config.apiKey, `/v1/files/${fileId}/content`);
+    return parseBatchResultJsonl(content);
   }
 }
 
@@ -256,7 +463,29 @@ export class MistralQuestionExtractor {
 
 export function parseMistralExtractionContent(content: string): ExtractedQuestionCandidate[] {
   const extracted = parseExtractionResponse(content);
-  return extracted.candidates.map((candidate) => {
+  return extracted.candidates.map(normalizeExtractionCandidate);
+}
+
+export function parseMistralSolvingContent(content: string): ExtractedQuestionCandidate {
+  const solved = parseSolvingResponse(content);
+  return normalizeExtractionCandidate(solved.candidate);
+}
+
+export function parseMistralOcrResult(raw: unknown): OcrResult {
+  const parsed = mistralOcrResponseSchema.parse(raw);
+  return {
+    provider: "MISTRAL",
+    model: parsed.model,
+    pages: parsed.pages.map(normalizeMistralPage),
+    usage: {
+      pagesProcessed: parsed.usage_info?.pages_processed,
+      docSizeBytes: parsed.usage_info?.doc_size_bytes
+    },
+    rawJson: sanitizeMistralOcrRawJson(raw)
+  };
+}
+
+function normalizeExtractionCandidate(candidate: z.infer<typeof extractionCandidateSchema>): ExtractedQuestionCandidate {
     const invalidConfidence =
       isOutOfRangeConfidence(candidate.overall_confidence) ||
       Object.values(candidate.field_confidence).some(isOutOfRangeConfidence);
@@ -291,7 +520,23 @@ export function parseMistralExtractionContent(content: string): ExtractedQuestio
       ]),
       sourceEvidence: candidate.source_evidence
     };
-  });
+}
+
+export function parseMistralChatCandidateBatchBody(body: unknown) {
+  const completion = chatCompletionSchema.parse(body);
+  const firstChoice = completion.choices[0];
+  if (!firstChoice) {
+    throw new Error("Mistral batch chat response returned no choices");
+  }
+
+  return {
+    content: firstChoice.message.content,
+    usage: {
+      promptTokens: completion.usage?.prompt_tokens,
+      completionTokens: completion.usage?.completion_tokens,
+      totalTokens: completion.usage?.total_tokens
+    }
+  };
 }
 
 function parseExtractionResponse(content: string) {
@@ -304,8 +549,31 @@ function parseExtractionResponse(content: string) {
   }
 }
 
+function parseSolvingResponse(content: string) {
+  try {
+    return solvingResponseSchema.parse(JSON.parse(content));
+  } catch (error) {
+    throw new Error("Mistral solving response did not match the required candidate schema.", {
+      cause: error
+    });
+  }
+}
+
 function normalizeMistralPage(page: z.infer<typeof mistralOcrPageSchema>): OcrPage {
   const confidence = page.confidence_scores ?? undefined;
+  const images = normalizeMistralImages(page);
+  const imageBlocks = images.map((image) => ({
+    blockType: "image",
+    text: image.fileName,
+    boundingBox: image.boundingBox,
+    sourceAsset: {
+      id: image.id,
+      fileName: image.fileName,
+      mimeType: image.mimeType
+    },
+    rawJson: sanitizeMistralOcrRawJson(image.rawJson)
+  }));
+  const providerBlocks = (page.blocks ?? []).map((block) => normalizeMistralBlock(block));
   return {
     pageNumber: page.index + 1,
     markdown: page.markdown,
@@ -315,15 +583,18 @@ function normalizeMistralPage(page: z.infer<typeof mistralOcrPageSchema>): OcrPa
     width: page.dimensions?.width,
     height: page.dimensions?.height,
     dpi: page.dimensions?.dpi,
-    rawJson: page,
+    rawJson: sanitizeMistralOcrRawJson(page),
     blocks: [
       {
         blockType: "markdown_page",
         text: page.markdown,
         confidence: confidence?.average_page_confidence_score,
-        rawJson: page
-      }
-    ]
+        rawJson: sanitizeMistralOcrRawJson(page)
+      },
+      ...providerBlocks,
+      ...imageBlocks
+    ],
+    images
   };
 }
 
@@ -335,6 +606,148 @@ function buildExtractionPrompt(pages: OcrPage[]) {
       }\\n\\n${page.markdown}`;
     })
     .join("\\n\\n---\\n\\n");
+}
+
+function buildSolvingPrompt(candidate: ExtractedQuestionCandidate, imageUrls: Array<{ label: string; url: string }>) {
+  const diagramLines =
+    imageUrls.length > 0
+      ? imageUrls.map((image, index) => `${index + 1}. ${image.label}: ${image.url}`).join("\\n")
+      : "No diagram images were attached.";
+
+  return [
+    "OCR-grounded candidate:",
+    JSON.stringify(candidate, null, 2),
+    "",
+    "Attached image URLs:",
+    diagramLines,
+    "",
+    "Return the same candidate shape. Fix incomplete OCR text only when the evidence supports the fix. Solve only this candidate."
+  ].join("\\n");
+}
+
+function normalizeMistralImages(page: z.infer<typeof mistralOcrPageSchema>): OcrImage[] {
+  return (page.images ?? []).flatMap((image, index) => {
+    const imageRecord = asRecordOrUndefined(image);
+    const imageBase64 = stringRecordValue(imageRecord, "image_base64") ?? stringRecordValue(imageRecord, "base64");
+    if (!imageBase64) {
+      return [];
+    }
+
+    const parsed = parseImageBase64(imageBase64);
+    const id = stringRecordValue(imageRecord, "id") ?? `page-${page.index + 1}-image-${index + 1}`;
+    return [
+      {
+        id,
+        fileName: imageFileName(id, parsed.mimeType),
+        mimeType: parsed.mimeType,
+        base64: parsed.base64,
+        boundingBox: boundingBoxFromRecord(imageRecord),
+        rawJson: sanitizeMistralOcrRawJson(image)
+      }
+    ];
+  });
+}
+
+function normalizeMistralBlock(block: unknown) {
+  const blockRecord = asRecordOrUndefined(block);
+  const blockType = stringRecordValue(blockRecord, "type") ?? stringRecordValue(blockRecord, "block_type") ?? "ocr_block";
+  const text = stringRecordValue(blockRecord, "text") ?? stringRecordValue(blockRecord, "content") ?? "";
+  return {
+    blockType,
+    text,
+    boundingBox: boundingBoxFromRecord(blockRecord),
+    sourceAsset: blockRecord?.image_id ? { imageId: blockRecord.image_id } : undefined,
+    rawJson: sanitizeMistralOcrRawJson(block)
+  };
+}
+
+function parseImageBase64(value: string) {
+  const match = /^data:(?<mimeType>[-\w.]+\/[-+\w.]+);base64,(?<base64>.*)$/u.exec(value);
+  if (match?.groups?.mimeType && match.groups.base64) {
+    return {
+      mimeType: match.groups.mimeType,
+      base64: match.groups.base64
+    };
+  }
+
+  return {
+    mimeType: "image/png",
+    base64: value
+  };
+}
+
+function imageFileName(id: string, mimeType: string) {
+  const extension = mimeType.split("/")[1]?.replace(/[^a-zA-Z0-9]/g, "") || "png";
+  return `${id.replace(/[^a-zA-Z0-9._-]/g, "_")}.${extension}`;
+}
+
+function boundingBoxFromRecord(record: Record<string, unknown> | undefined) {
+  if (!record) {
+    return undefined;
+  }
+
+  const keys = ["bbox", "bounding_box", "top_left_x", "top_left_y", "bottom_right_x", "bottom_right_y"];
+  const entries = keys
+    .filter((key) => Object.prototype.hasOwnProperty.call(record, key))
+    .map((key) => [key, record[key]] as const);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function sanitizeMistralOcrRawJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeMistralOcrRawJson);
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, childValue]) => [
+      key,
+      key === "image_base64" || key === "base64" ? "[stored-in-r2]" : sanitizeMistralOcrRawJson(childValue)
+    ])
+  );
+}
+
+function normalizeMistralBatchJob(raw: unknown): MistralBatchJob {
+  const parsed = mistralBatchJobSchema.parse(raw);
+  return {
+    id: parsed.id,
+    status: parsed.status,
+    model: parsed.model,
+    endpoint: parsed.endpoint,
+    inputFiles: parsed.input_files ?? parsed.inputFiles ?? [],
+    outputFile: parsed.output_file ?? parsed.outputFile ?? undefined,
+    errorFile: parsed.error_file ?? parsed.errorFile ?? undefined,
+    totalRequests: parsed.total_requests ?? parsed.totalRequests,
+    succeededRequests: parsed.succeeded_requests ?? parsed.succeededRequests,
+    failedRequests: parsed.failed_requests ?? parsed.failedRequests,
+    rawJson: raw
+  };
+}
+
+function parseBatchResultJsonl(content: string): MistralBatchResultLine[] {
+  return content
+    .split("\\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const raw = JSON.parse(line) as unknown;
+      const parsed = mistralBatchResultLineSchema.parse(raw);
+      return {
+        id: parsed.id,
+        customId: parsed.custom_id,
+        statusCode: parsed.response?.status_code,
+        body: parsed.response?.body,
+        error: parsed.error ?? undefined,
+        rawJson: raw
+      };
+    });
+}
+
+function toJsonl(lines: MistralBatchLine[]) {
+  return lines.map((line) => JSON.stringify(line)).join("\\n");
 }
 
 async function callMistral(apiKey: string, path: string, body: unknown): Promise<unknown> {
@@ -353,6 +766,55 @@ async function callMistral(apiKey: string, path: string, body: unknown): Promise
   }
 
   return response.json();
+}
+
+async function callMistralForm(apiKey: string, path: string, body: FormData): Promise<unknown> {
+  const response = await fetch(`https://api.mistral.ai${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`
+    },
+    body
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Mistral request failed ${response.status}: ${errorBody}`);
+  }
+
+  return response.json();
+}
+
+async function getMistral(apiKey: string, path: string): Promise<unknown> {
+  const response = await fetch(`https://api.mistral.ai${path}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${apiKey}`
+    }
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Mistral request failed ${response.status}: ${errorBody}`);
+  }
+
+  return response.json();
+}
+
+async function getMistralText(apiKey: string, path: string) {
+  const response = await fetch(`https://api.mistral.ai${path}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${apiKey}`
+    }
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Mistral request failed ${response.status}: ${errorBody}`);
+  }
+
+  return response.text();
 }
 
 function requiredEnv(env: NodeJS.ProcessEnv, key: string) {
@@ -381,4 +843,17 @@ function normalizeConfidence(value: number) {
 
 function isOutOfRangeConfidence(value: number) {
   return value < 0 || value > 1;
+}
+
+function asRecordOrUndefined(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function stringRecordValue(record: Record<string, unknown> | undefined, key: string) {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
 }

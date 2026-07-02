@@ -8,7 +8,7 @@ export default function RunsPage() {
       <header className="page-header">
         <div>
           <p className="eyebrow">Runs</p>
-          <h1>Ingestion run lookup</h1>
+          <h1>Ingestion jobs</h1>
         </div>
       </header>
       <Suspense fallback={<RunLookupFallback />}>

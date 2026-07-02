@@ -35,6 +35,8 @@ export async function startPaperIngestionWorkflow(
   input: {
     ingestionRunId: string;
     sourcePaperId: string;
+    retryImportBatchJobId?: string | undefined;
+    retryImportOperation?: "ocr" | "question_segmentation" | "question_solving" | undefined;
   }
 ): Promise<StartedPaperIngestionWorkflow> {
   const client = await getTemporalClient(config);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseMistralExtractionContent } from "./mistral.js";
+import { MistralBatchProvider, parseMistralExtractionContent, parseMistralOcrResult } from "./mistral.js";
 
 const baseCandidate = {
   raw_ocr_text: "1. What is photosynthesis?",
@@ -164,7 +164,9 @@ describe("MistralQuestionExtractor", () => {
       const extractor = new MistralQuestionExtractor({
         apiKey: "test-key",
         ocrModel: "mistral-ocr-latest",
-        extractorModel: "mistral-small-latest"
+        extractorModel: "mistral-small-latest",
+        segmentationModel: "mistral-small-latest",
+        solverModel: "mistral-large-latest"
       });
 
       await extractor.extractFromPages([
@@ -172,7 +174,8 @@ describe("MistralQuestionExtractor", () => {
           pageNumber: 1,
           markdown: "1. What is photosynthesis?",
           rawJson: {},
-          blocks: []
+          blocks: [],
+          images: []
         }
       ]);
     } finally {
@@ -215,6 +218,91 @@ describe("MistralQuestionExtractor", () => {
     expect(validationItems.enum).toEqual(expect.arrayContaining(["VALIDATION_FAILED", "LOW_TOPIC_CONFIDENCE"]));
   });
 });
+
+describe("MistralBatchProvider", () => {
+  it("builds OCR batch lines with markdown tables, confidence, and image extraction enabled", () => {
+    const provider = new MistralBatchProvider(testMistralConfig);
+
+    expect(
+      provider.buildOcrBatchLine({
+        customId: "sourcePaper:source-1",
+        documentUrl: "https://r2.example/source.pdf"
+      })
+    ).toEqual({
+      custom_id: "sourcePaper:source-1",
+      body: {
+        document: {
+          type: "document_url",
+          document_url: "https://r2.example/source.pdf"
+        },
+        confidence_scores_granularity: "word",
+        table_format: "markdown",
+        include_image_base64: true
+      }
+    });
+  });
+
+  it("normalizes OCR images separately from sanitized page raw JSON", () => {
+    const result = parseMistralOcrResult({
+      model: "mistral-ocr-latest",
+      usage_info: {
+        pages_processed: 1,
+        doc_size_bytes: 123
+      },
+      pages: [
+        {
+          index: 0,
+          markdown: "![diagram](img-1.png)",
+          images: [
+            {
+              id: "img-1",
+              image_base64: "data:image/png;base64,aGVsbG8=",
+              top_left_x: 1,
+              top_left_y: 2,
+              bottom_right_x: 3,
+              bottom_right_y: 4
+            }
+          ],
+          dimensions: {
+            width: 100,
+            height: 200,
+            dpi: 200
+          }
+        }
+      ]
+    });
+
+    const image = result.pages[0]?.images[0];
+    expect(image?.id).toBe("img-1");
+    expect(image?.fileName).toBe("img-1.png");
+    expect(image?.mimeType).toBe("image/png");
+    expect(image?.base64).toBe("aGVsbG8=");
+    expect(image?.boundingBox).toEqual({
+      top_left_x: 1,
+      top_left_y: 2,
+      bottom_right_x: 3,
+      bottom_right_y: 4
+    });
+    expect(image?.rawJson).toMatchObject({
+      image_base64: "[stored-in-r2]"
+    });
+    expect(result.pages[0]?.rawJson).toMatchObject({
+      images: [
+        {
+          image_base64: "[stored-in-r2]"
+        }
+      ]
+    });
+  });
+});
+
+const testMistralConfig = {
+  apiKey: "test-key",
+  ocrModel: "mistral-ocr-latest",
+  extractorModel: "mistral-small-latest",
+  segmentationModel: "mistral-small-latest",
+  solverModel: "mistral-large-latest"
+};
 
 function asRecord(value: unknown) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {

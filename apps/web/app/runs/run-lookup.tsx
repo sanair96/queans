@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { AlertTriangle, Search } from "lucide-react";
+import { AlertTriangle, RefreshCw, Search } from "lucide-react";
 
 import { assertOk } from "../api-errors";
 
@@ -13,6 +13,8 @@ interface IngestionRun {
   status: string;
   currentStep: string | null;
   sourcePaperId: string | null;
+  retryOfWorkflowRun?: RunLineageSummary | null;
+  retryAttempts?: RunLineageSummary[];
   outputPayload: unknown;
   errorPayload: unknown;
   failureSummary?: WorkflowFailureSummary | null;
@@ -47,6 +49,60 @@ interface IngestionRun {
     outputTokenCount: number | null;
     estimatedCostUsd: string | null;
   }>;
+  providerBatchJobs: ProviderBatchJob[];
+}
+
+interface IngestionRunListItem {
+  id: string;
+  status: string;
+  currentStep: string | null;
+  createdAt: string;
+  sourcePaperId: string | null;
+  retryOfWorkflowRunId: string | null;
+  sourcePaper: {
+    id: string;
+    title: string | null;
+    sourceFileName: string;
+    status: string;
+  } | null;
+  latestStep: {
+    stepName: string;
+    status: string;
+  } | null;
+  latestBatchJob: ProviderBatchJob | null;
+  counts?: {
+    questionCandidates: number;
+    reviewItems: number;
+    ocrPages: number;
+  };
+  estimatedCostUsd: string | null;
+}
+
+interface ProviderBatchJob {
+  id: string;
+  provider: string;
+  operation: string;
+  endpoint: string;
+  model: string;
+  status: string;
+  inputFileId: string | null;
+  providerJobId: string | null;
+  outputFileId: string | null;
+  errorFileId: string | null;
+  totalRequests: number | null;
+  succeededRequests: number | null;
+  failedRequests: number | null;
+  createdAt: string;
+  updatedAt: string;
+  importedAt: string | null;
+  importError: unknown;
+}
+
+interface RunLineageSummary {
+  id: string;
+  status: string;
+  currentStep: string | null;
+  createdAt: string;
 }
 
 interface WorkflowFailureSummary {
@@ -80,14 +136,31 @@ export function RunLookup() {
   const initialRunId = searchParams.get("run") ?? "";
   const [runId, setRunId] = useState(initialRunId);
   const [run, setRun] = useState<IngestionRun | null>(null);
+  const [runs, setRuns] = useState<IngestionRunListItem[]>([]);
+  const [filterStatus, setFilterStatus] = useState("");
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const [retrying, setRetrying] = useState<string | null>(null);
 
   useEffect(() => {
+    void loadRuns();
     if (initialRunId) {
       void loadRun(initialRunId);
     }
   }, [initialRunId]);
+
+  async function loadRuns() {
+    const params = new URLSearchParams();
+    if (filterStatus.trim()) {
+      params.set("status", filterStatus.trim());
+    }
+    const response = await fetch(`${apiBaseUrl}/api/ingestions?${params.toString()}`, {
+      cache: "no-store"
+    });
+    await assertOk(response, "Run history");
+    const payload = (await response.json()) as { runs: IngestionRunListItem[] };
+    setRuns(payload.runs);
+  }
 
   async function loadRun(id = runId) {
     const trimmed = id.trim();
@@ -104,6 +177,7 @@ export function RunLookup() {
       });
       await assertOk(response, "Run lookup");
       setRun((await response.json()) as IngestionRun);
+      setRunId(trimmed);
     } catch (error) {
       setRun(null);
       setStatus(error instanceof Error ? error.message : "Run lookup failed.");
@@ -112,11 +186,142 @@ export function RunLookup() {
     }
   }
 
+  async function retryRun(id: string) {
+    setRetrying(`run:${id}`);
+    setStatus("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/ingestions/${id}/retry`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({})
+      });
+      await assertOk(response, "Retry run");
+      const payload = (await response.json()) as { ingestionRunId: string };
+      await loadRuns();
+      await loadRun(payload.ingestionRunId);
+      setStatus(`Retry queued: ${payload.ingestionRunId}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Retry failed.");
+    } finally {
+      setRetrying(null);
+    }
+  }
+
+  async function retryBatchImport(id: string) {
+    setRetrying(`batch:${id}`);
+    setStatus("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/provider-batch-jobs/${id}/retry-import`, {
+        method: "POST"
+      });
+      await assertOk(response, "Retry batch import");
+      const payload = (await response.json()) as { ingestionRunId: string };
+      await loadRuns();
+      await loadRun(payload.ingestionRunId);
+      setStatus(`Batch import retry queued: ${payload.ingestionRunId}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Batch import retry failed.");
+    } finally {
+      setRetrying(null);
+    }
+  }
+
   const failureSummary = run ? failureSummaryForRun(run) : null;
   const totalEstimatedCost = run ? totalEstimatedCostUsd(run.costs) : null;
 
   return (
     <section className="run-lookup">
+      <div className="panel flat">
+        <div className="runs-toolbar">
+          <select value={filterStatus} onChange={(event) => setFilterStatus(event.target.value)} aria-label="Filter status">
+            <option value="">All statuses</option>
+            <option value="PENDING">Pending</option>
+            <option value="RUNNING">Running</option>
+            <option value="WAITING_FOR_REVIEW">Waiting for review</option>
+            <option value="FAILED">Failed</option>
+            <option value="COMPLETED">Completed</option>
+            <option value="CANCELLED">Cancelled</option>
+          </select>
+          <button className="btn secondary" type="button" onClick={() => void loadRuns()}>
+            <RefreshCw size={16} aria-hidden="true" />
+            Refresh
+          </button>
+        </div>
+        <table className="table runs-table">
+          <thead>
+            <tr>
+              <th>Run</th>
+              <th>Source</th>
+              <th>Status</th>
+              <th>Batch</th>
+              <th>Counts</th>
+              <th>Cost</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map((item) => (
+              <tr key={item.id}>
+                <td>
+                  <button className="link-button" type="button" onClick={() => void loadRun(item.id)}>
+                    {shortId(item.id)}
+                  </button>
+                  <span className="muted">{new Date(item.createdAt).toLocaleString()}</span>
+                  {item.retryOfWorkflowRunId ? <span className="badge">Retry</span> : null}
+                </td>
+                <td>{item.sourcePaper?.sourceFileName ?? item.sourcePaperId ?? "-"}</td>
+                <td>
+                  <span className={`badge ${item.status.toLowerCase()}`}>{item.status}</span>
+                  <span className="muted">{item.currentStep ?? item.latestStep?.stepName ?? "-"}</span>
+                </td>
+                <td>
+                  {item.latestBatchJob ? (
+                    <>
+                      <strong>{item.latestBatchJob.operation}</strong>
+                      <span className="muted">{item.latestBatchJob.status}</span>
+                    </>
+                  ) : (
+                    "-"
+                  )}
+                </td>
+                <td>
+                  {item.counts
+                    ? `${item.counts.ocrPages} pages, ${item.counts.questionCandidates} candidates, ${item.counts.reviewItems} review`
+                    : "-"}
+                </td>
+                <td>{formatEstimatedCostUsd(item.estimatedCostUsd)}</td>
+                <td>
+                  <div className="row-actions">
+                    <button className="btn secondary" type="button" onClick={() => void loadRun(item.id)}>
+                      View
+                    </button>
+                    {isRunRetryable(item.status) ? (
+                      <button
+                        className="btn secondary"
+                        type="button"
+                        disabled={retrying !== null}
+                        onClick={() => void retryRun(item.id)}
+                      >
+                        Retry
+                      </button>
+                    ) : null}
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {runs.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="muted">
+                  No ingestion runs found.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+
       <div className="panel flat">
         <div className="lookup-form">
           <input value={runId} onChange={(event) => setRunId(event.target.value)} placeholder="ingestion run id" />
@@ -137,6 +342,11 @@ export function RunLookup() {
               <p className="eyebrow">Status</p>
               <h2>{run.status}</h2>
               <span className="muted">{run.currentStep ?? "No active step"}</span>
+              {run.retryOfWorkflowRun ? (
+                <button className="link-button" type="button" onClick={() => void loadRun(run.retryOfWorkflowRun?.id ?? "")}>
+                  Retry of {shortId(run.retryOfWorkflowRun.id)}
+                </button>
+              ) : null}
             </div>
             <div className="stat-row compact">
               <div className="stat">
@@ -250,6 +460,79 @@ export function RunLookup() {
               </tbody>
             </table>
           </section>
+
+          <section className="panel">
+            <h2>Provider batch jobs</h2>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Operation</th>
+                  <th>Status</th>
+                  <th>Model</th>
+                  <th>Requests</th>
+                  <th>Files</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {run.providerBatchJobs.map((job) => (
+                  <tr key={job.id}>
+                    <td>
+                      <strong>{job.operation}</strong>
+                      <span className="muted">{shortId(job.providerJobId ?? job.id)}</span>
+                    </td>
+                    <td>
+                      <span className={`badge ${job.status.toLowerCase()}`}>{job.status}</span>
+                      {hasPayload(job.importError) ? <span className="step-error">Import failed</span> : null}
+                    </td>
+                    <td>{job.model}</td>
+                    <td>
+                      {job.totalRequests ?? "-"} total, {job.succeededRequests ?? "-"} ok, {job.failedRequests ?? "-"} failed
+                    </td>
+                    <td>
+                      <span className="muted">input {shortId(job.inputFileId)}</span>
+                      <span className="muted">output {shortId(job.outputFileId)}</span>
+                      <span className="muted">error {shortId(job.errorFileId)}</span>
+                    </td>
+                    <td>
+                      {isBatchImportRetryable(job) ? (
+                        <button
+                          className="btn secondary"
+                          type="button"
+                          disabled={retrying !== null}
+                          onClick={() => void retryBatchImport(job.id)}
+                        >
+                          Retry import
+                        </button>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {run.providerBatchJobs.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="muted">
+                      No provider batch jobs recorded.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </section>
+
+          {run.retryAttempts && run.retryAttempts.length > 0 ? (
+            <section className="panel">
+              <h2>Retry attempts</h2>
+              <div className="retry-list">
+                {run.retryAttempts.map((attempt) => (
+                  <button className="link-button" type="button" key={attempt.id} onClick={() => void loadRun(attempt.id)}>
+                    {shortId(attempt.id)} · {attempt.status} · {attempt.currentStep ?? "No active step"}
+                  </button>
+                ))}
+              </div>
+            </section>
+          ) : null}
         </>
       ) : null}
     </section>
@@ -337,6 +620,18 @@ function stableJson(value: unknown) {
 
 function hasPayload(value: unknown) {
   return value !== null && value !== undefined;
+}
+
+export function shortId(value: string | null | undefined) {
+  return value ? value.slice(0, 8) : "-";
+}
+
+export function isRunRetryable(status: string) {
+  return status === "FAILED" || status === "CANCELLED";
+}
+
+export function isBatchImportRetryable(job: Pick<ProviderBatchJob, "outputFileId" | "status">) {
+  return Boolean(job.outputFileId) && ["IMPORT_FAILED", "SUCCEEDED", "IMPORTED"].includes(job.status);
 }
 
 export function totalEstimatedCostUsd(costs: Array<{ estimatedCostUsd: string | null }>) {

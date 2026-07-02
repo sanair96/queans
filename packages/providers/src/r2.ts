@@ -25,6 +25,11 @@ export interface StoredObjectHead {
   contentType?: string | undefined;
 }
 
+export interface StoredObjectPut {
+  objectKey: string;
+  etag?: string | undefined;
+}
+
 export function loadR2ConfigFromEnv(env: NodeJS.ProcessEnv): R2Config {
   const accountId = requiredEnv(env, "R2_ACCOUNT_ID");
   return {
@@ -126,6 +131,22 @@ export class R2ObjectStore {
       etag: response.ETag,
       byteSize: response.ContentLength,
       contentType: response.ContentType
+    };
+  }
+
+  async putObject(input: { objectKey: string; body: Uint8Array; contentType: string }): Promise<StoredObjectPut> {
+    const response = await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.config.bucket,
+        Key: input.objectKey,
+        Body: input.body,
+        ContentType: input.contentType
+      })
+    );
+
+    return {
+      objectKey: input.objectKey,
+      etag: response.ETag
     };
   }
 }
