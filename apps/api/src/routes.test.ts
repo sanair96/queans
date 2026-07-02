@@ -12,6 +12,8 @@ import {
   isPrismaUniqueConstraintError,
   mutableReviewItemWhere,
   openReviewItemsWhere,
+  paperContextPayloadFromSourcePaper,
+  paperIngestionInputPayload,
   reviewApprovalConflictPayload,
   reviewEditApprovalConflictPayload,
   reviewItemAlreadyClosedPayload,
@@ -21,6 +23,12 @@ import {
   uploadCompletionConflict,
   uploadCompletionPayload
 } from "./routes.js";
+
+const apiConfig = {
+  TEMPORAL_TASK_QUEUE_PAPER_INGESTION: "paper-ingestion",
+  TEMPORAL_TASK_QUEUE_OCR: "paper-ocr",
+  TEMPORAL_TASK_QUEUE_LLM: "paper-llm-extraction"
+};
 
 describe("uploadCompletionPayload", () => {
   it("returns the latest ingestion run for an already completed upload", () => {
@@ -50,6 +58,82 @@ describe("uploadCompletionPayload", () => {
       ingestionRunId: undefined,
       status: "PENDING"
     });
+  });
+});
+
+describe("paperIngestionInputPayload", () => {
+  it("captures R2 object identity, paper context, and Temporal queues for audit/debugging", () => {
+    expect(
+      paperIngestionInputPayload({
+        sourcePaperId: "source-paper-1",
+        uploadObjectId: "upload-1",
+        objectKey: "source-papers/2026-07-02/paper.pdf",
+        paperContext: {
+          board: "CBSE",
+          classLevel: "10",
+          subject: "Mathematics"
+        },
+        config: apiConfig
+      })
+    ).toEqual({
+      sourcePaperId: "source-paper-1",
+      uploadObjectId: "upload-1",
+      objectKey: "source-papers/2026-07-02/paper.pdf",
+      paperContext: {
+        board: "CBSE",
+        classLevel: "10",
+        subject: "Mathematics"
+      },
+      taskQueues: {
+        paperIngestion: "paper-ingestion",
+        ocr: "paper-ocr",
+        llm: "paper-llm-extraction"
+      }
+    });
+  });
+});
+
+describe("paperContextPayloadFromSourcePaper", () => {
+  it("rebuilds paper context from stored source paper fields for manual ingestion runs", () => {
+    expect(
+      paperContextPayloadFromSourcePaper({
+        title: "Algebra Midterm",
+        board: "CBSE",
+        classLevel: "10",
+        subject: "Mathematics",
+        year: 2026,
+        schoolName: "Apex Academy",
+        examType: "Midterm",
+        uploadedBy: "test@test.com",
+        metadata: { term: "Term 1" }
+      })
+    ).toEqual({
+      title: "Algebra Midterm",
+      board: "CBSE",
+      classLevel: "10",
+      subject: "Mathematics",
+      year: 2026,
+      schoolName: "Apex Academy",
+      examType: "Midterm",
+      uploadedBy: "test@test.com",
+      metadata: { term: "Term 1" }
+    });
+  });
+
+  it("returns null when a source paper has no stored paper context", () => {
+    expect(
+      paperContextPayloadFromSourcePaper({
+        title: null,
+        board: null,
+        classLevel: null,
+        subject: null,
+        year: null,
+        schoolName: null,
+        examType: null,
+        uploadedBy: null,
+        metadata: null
+      })
+    ).toBeNull();
   });
 });
 

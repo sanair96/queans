@@ -123,17 +123,13 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
             sourcePaperId: sourcePaper.id,
             status: "PENDING",
             currentStep: "store_file",
-            inputPayload: {
+            inputPayload: paperIngestionInputPayload({
               sourcePaperId: sourcePaper.id,
               uploadObjectId: completedUpload.id,
               objectKey: completedUpload.objectKey,
               paperContext: paperContextPayload,
-              taskQueues: {
-                paperIngestion: config.TEMPORAL_TASK_QUEUE_PAPER_INGESTION,
-                ocr: config.TEMPORAL_TASK_QUEUE_OCR,
-                llm: config.TEMPORAL_TASK_QUEUE_LLM
-              }
-            }
+              config
+            })
           }
         });
         await tx.workflowStartOutbox.create({
@@ -177,7 +173,10 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
 
   app.post<{ Params: IdParams }>("/api/papers/:id/ingestions", async (request, reply) => {
     const [sourcePaper, activeRun] = await Promise.all([
-      prisma.sourcePaper.findUnique({ where: { id: request.params.id } }),
+      prisma.sourcePaper.findUnique({
+        where: { id: request.params.id },
+        include: { uploadObject: true }
+      }),
       prisma.workflowRun.findFirst({
         where: {
           sourcePaperId: request.params.id,
@@ -207,14 +206,13 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
           sourcePaperId: sourcePaper.id,
           status: "PENDING",
           currentStep: "store_file",
-          inputPayload: {
+          inputPayload: paperIngestionInputPayload({
             sourcePaperId: sourcePaper.id,
-            taskQueues: {
-              paperIngestion: config.TEMPORAL_TASK_QUEUE_PAPER_INGESTION,
-              ocr: config.TEMPORAL_TASK_QUEUE_OCR,
-              llm: config.TEMPORAL_TASK_QUEUE_LLM
-            }
-          }
+            uploadObjectId: sourcePaper.uploadObjectId,
+            objectKey: sourcePaper.uploadObject.objectKey,
+            paperContext: paperContextPayloadFromSourcePaper(sourcePaper),
+            config
+          })
         }
       });
       await tx.workflowStartOutbox.create({ data: { workflowRunId: run.id } });
@@ -448,6 +446,55 @@ function sourcePaperContextData(paperContext: UploadCompleteInput["paperContext"
     uploadedBy: paperContext?.uploadedBy ?? null,
     metadata: toNullableInputJson(paperContext?.metadata)
   };
+}
+
+export function paperIngestionInputPayload(input: {
+  sourcePaperId: string;
+  uploadObjectId: string;
+  objectKey: string;
+  paperContext: Prisma.InputJsonValue | null;
+  config: Pick<
+    ApiConfig,
+    "TEMPORAL_TASK_QUEUE_PAPER_INGESTION" | "TEMPORAL_TASK_QUEUE_OCR" | "TEMPORAL_TASK_QUEUE_LLM"
+  >;
+}) {
+  return {
+    sourcePaperId: input.sourcePaperId,
+    uploadObjectId: input.uploadObjectId,
+    objectKey: input.objectKey,
+    paperContext: input.paperContext,
+    taskQueues: {
+      paperIngestion: input.config.TEMPORAL_TASK_QUEUE_PAPER_INGESTION,
+      ocr: input.config.TEMPORAL_TASK_QUEUE_OCR,
+      llm: input.config.TEMPORAL_TASK_QUEUE_LLM
+    }
+  };
+}
+
+export function paperContextPayloadFromSourcePaper(sourcePaper: {
+  title: string | null;
+  board: string | null;
+  classLevel: string | null;
+  subject: string | null;
+  year: number | null;
+  schoolName: string | null;
+  examType: string | null;
+  uploadedBy: string | null;
+  metadata: Prisma.JsonValue;
+}) {
+  const payload = {
+    title: sourcePaper.title ?? undefined,
+    board: sourcePaper.board ?? undefined,
+    classLevel: sourcePaper.classLevel ?? undefined,
+    subject: sourcePaper.subject ?? undefined,
+    year: sourcePaper.year ?? undefined,
+    schoolName: sourcePaper.schoolName ?? undefined,
+    examType: sourcePaper.examType ?? undefined,
+    uploadedBy: sourcePaper.uploadedBy ?? undefined,
+    metadata: sourcePaper.metadata === null ? undefined : sourcePaper.metadata
+  };
+  const entries = Object.entries(payload).filter(([, value]) => value !== undefined);
+  return entries.length > 0 ? toInputJson(Object.fromEntries(entries)) : null;
 }
 
 export function uploadCompletionPayload(sourcePaper: {
