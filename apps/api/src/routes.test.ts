@@ -12,7 +12,9 @@ import {
   isPrismaUniqueConstraintError,
   mutableReviewItemWhere,
   openReviewItemsWhere,
+  reviewApprovalConflictPayload,
   reviewItemAlreadyClosedPayload,
+  reviewReasonCodesFromJson,
   reviewSignalRunForItem,
   uploadCompletionConflict,
   uploadCompletionPayload
@@ -324,6 +326,84 @@ describe("mutableReviewItemWhere", () => {
       status: { in: [ReviewStatus.OPEN, ReviewStatus.ASSIGNED] },
       appliedAt: null
     });
+  });
+});
+
+describe("reviewApprovalConflictPayload", () => {
+  const completeCandidate = {
+    cleanedQuestionText: "What is photosynthesis?",
+    answerText: "Photosynthesis converts light energy into chemical energy.",
+    questionType: "SHORT_ANSWER",
+    marks: 2
+  };
+
+  it("blocks direct approval when the candidate is incomplete as-is", () => {
+    expect(
+      reviewApprovalConflictPayload({
+        reasonCodes: [],
+        candidate: {
+          cleanedQuestionText: " ",
+          answerText: null,
+          questionType: "UNKNOWN",
+          marks: null
+        }
+      })
+    ).toEqual({
+      error: "REVIEW_APPROVAL_REQUIRES_EDIT",
+      message:
+        "Direct approval can only ingest complete candidates as-is. Edit and approve, reject, mark duplicate, request more info, or mark this review item unprocessable.",
+      missingFields: ["cleanedQuestionText", "answerText", "questionType", "marks"],
+      blockingReasons: []
+    });
+  });
+
+  it("blocks direct approval for hard validation reasons that require another decision or edit", () => {
+    expect(
+      reviewApprovalConflictPayload({
+        reasonCodes: ["MCQ_OPTIONS_MISSING", { code: "DIAGRAM_ASSET_MISSING" }, "LOW_OCR_CONFIDENCE"],
+        candidate: completeCandidate
+      })
+    ).toMatchObject({
+      error: "REVIEW_APPROVAL_REQUIRES_EDIT",
+      missingFields: [],
+      blockingReasons: ["MCQ_OPTIONS_MISSING", "DIAGRAM_ASSET_MISSING"]
+    });
+  });
+
+  it("allows direct approval for complete candidates that only need human confidence confirmation", () => {
+    expect(
+      reviewApprovalConflictPayload({
+        reasonCodes: [
+          "LOW_OCR_CONFIDENCE",
+          "LOW_FIELD_CONFIDENCE",
+          "VALIDATION_FAILED",
+          "LOW_ANSWER_CONFIDENCE",
+          "ANSWER_UNCERTAIN",
+          "LLM_GENERATED_ANSWER_UNVERIFIED",
+          "TOPIC_AMBIGUOUS",
+          "TOPIC_NOT_MAPPED"
+        ],
+        candidate: completeCandidate
+      })
+    ).toBeUndefined();
+  });
+});
+
+describe("reviewReasonCodesFromJson", () => {
+  it("extracts known review reason strings from mixed JSON payloads", () => {
+    expect(
+      reviewReasonCodesFromJson([
+        "MISSING_REQUIRED_FIELD",
+        { code: "LOW_TOPIC_CONFIDENCE" },
+        { code: "NOT_A_REASON" },
+        { value: "VALIDATION_FAILED" },
+        null
+      ])
+    ).toEqual(["MISSING_REQUIRED_FIELD", "LOW_TOPIC_CONFIDENCE"]);
+  });
+
+  it("returns an empty list for non-array reason payloads", () => {
+    expect(reviewReasonCodesFromJson(null)).toEqual([]);
   });
 });
 

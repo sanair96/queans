@@ -2,11 +2,17 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import type { FastifyInstance, FastifyReply } from "fastify";
 
-import { reviewPatchSchema, summarizeWorkflowFailure, uploadCompleteSchema, uploadInitSchema } from "@queans/core";
+import {
+  reviewPatchSchema,
+  reviewReasonCodes,
+  summarizeWorkflowFailure,
+  uploadCompleteSchema,
+  uploadInitSchema
+} from "@queans/core";
 import { Prisma, prisma, ReviewStatus, WorkflowStatus } from "@queans/db";
 import { loadR2ConfigFromEnv, R2ObjectStore, type StoredObjectHead } from "@queans/providers";
 
-import type { UploadCompleteInput } from "@queans/core";
+import type { ReviewReasonCode, UploadCompleteInput } from "@queans/core";
 import type { ApiConfig } from "./config.js";
 import { dispatchPendingWorkflowStarts } from "./outbox.js";
 import { checkReadiness } from "./readiness.js";
@@ -301,6 +307,14 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
             id: true,
             status: true
           }
+        },
+        candidate: {
+          select: {
+            cleanedQuestionText: true,
+            answerText: true,
+            questionType: true,
+            marks: true
+          }
         }
       }
     });
@@ -311,6 +325,13 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
 
     if (!canPatchReviewItem(reviewItem)) {
       return reply.code(409).send(reviewItemAlreadyClosedPayload(reviewItem));
+    }
+
+    if (input.decision === "APPROVE") {
+      const approvalConflict = reviewApprovalConflictPayload(reviewItem);
+      if (approvalConflict) {
+        return reply.code(409).send(approvalConflict);
+      }
     }
 
     try {
@@ -576,6 +597,26 @@ interface ReviewItemMutationState {
   appliedAt: Date | null;
 }
 
+interface ReviewItemApprovalState {
+  reasonCodes: Prisma.JsonValue;
+  candidate: {
+    cleanedQuestionText: string;
+    answerText: string | null;
+    questionType: string;
+    marks: number | null;
+  };
+}
+
+const reviewReasonCodeSet = new Set<string>(reviewReasonCodes);
+const directApprovalBlockingReasonCodes = new Set<ReviewReasonCode>([
+  "MISSING_REQUIRED_FIELD",
+  "MISSING_QUESTION_TEXT",
+  "MISSING_MARKS",
+  "MCQ_OPTIONS_MISSING",
+  "MCQ_CORRECT_ANSWER_MISSING",
+  "DIAGRAM_ASSET_MISSING"
+]);
+
 const mutableReviewStatuses = [ReviewStatus.OPEN, ReviewStatus.ASSIGNED] as const;
 
 export function openReviewItemsWhere() {
@@ -598,6 +639,45 @@ export function mutableReviewItemWhere(id: string) {
     status: { in: [...mutableReviewStatuses] },
     appliedAt: null
   } satisfies Prisma.ReviewItemWhereInput;
+}
+
+export function reviewApprovalConflictPayload(reviewItem: ReviewItemApprovalState) {
+  const missingFields = missingDirectApprovalFields(reviewItem.candidate);
+  const blockingReasons = reviewReasonCodesFromJson(reviewItem.reasonCodes).filter((reason) =>
+    directApprovalBlockingReasonCodes.has(reason)
+  );
+
+  if (missingFields.length === 0 && blockingReasons.length === 0) {
+    return undefined;
+  }
+
+  return {
+    error: "REVIEW_APPROVAL_REQUIRES_EDIT",
+    message:
+      "Direct approval can only ingest complete candidates as-is. Edit and approve, reject, mark duplicate, request more info, or mark this review item unprocessable.",
+    missingFields,
+    blockingReasons: [...new Set(blockingReasons)]
+  };
+}
+
+export function reviewReasonCodesFromJson(value: Prisma.JsonValue) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (typeof item === "string") {
+        return item;
+      }
+
+      if (item && typeof item === "object" && !Array.isArray(item) && "code" in item && typeof item.code === "string") {
+        return item.code;
+      }
+
+      return undefined;
+    })
+    .filter((code): code is ReviewReasonCode => code !== undefined && reviewReasonCodeSet.has(code));
 }
 
 export function reviewSignalRunForItem(reviewItem: { workflowRun: { id: string; status: string } }) {
@@ -636,6 +716,28 @@ export function reviewItemAlreadyClosedPayload(reviewItem: ReviewItemMutationSta
     status: reviewItem.status,
     appliedAt: reviewItem.appliedAt?.toISOString() ?? null
   };
+}
+
+function missingDirectApprovalFields(candidate: ReviewItemApprovalState["candidate"]) {
+  const missingFields = [];
+
+  if (candidate.cleanedQuestionText.trim().length === 0) {
+    missingFields.push("cleanedQuestionText");
+  }
+
+  if (candidate.answerText === null || candidate.answerText.trim().length === 0) {
+    missingFields.push("answerText");
+  }
+
+  if (candidate.questionType === "UNKNOWN") {
+    missingFields.push("questionType");
+  }
+
+  if (candidate.marks === null) {
+    missingFields.push("marks");
+  }
+
+  return missingFields;
 }
 
 class ReviewItemAlreadyClosedError extends Error {}
