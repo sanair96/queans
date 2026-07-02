@@ -337,6 +337,75 @@ export async function extractQuestionsAndPersist(input: PaperIngestionWorkflowIn
   };
 }
 
+export async function solveQuestionsAndPersist(input: PaperIngestionWorkflowInput) {
+  const candidates = await prisma.questionCandidate.findMany({
+    where: {
+      sourcePaperId: input.sourcePaperId,
+      approvedQuestionId: null,
+      reviewStatus: { in: [CandidateStatus.EXTRACTED, CandidateStatus.NEEDS_REVIEW] }
+    },
+    orderBy: [{ sourcePageStart: "asc" }, { pageNumber: "asc" }, { questionNumber: "asc" }, { createdAt: "asc" }]
+  });
+
+  if (candidates.length === 0) {
+    return {
+      skipped: true,
+      reason: "NO_CANDIDATES_TO_SOLVE"
+    };
+  }
+
+  const extractor = createQuestionExtractorFromEnv(process.env);
+  const objectStore = new R2ObjectStore(loadR2ConfigFromEnv(process.env));
+  let candidatesSolved = 0;
+  let candidatesFailed = 0;
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let model: string | undefined;
+
+  for (const candidate of candidates) {
+    try {
+      const solved = await extractor.solveCandidate(
+        candidateToExtracted(candidate),
+        await signedImageUrlsForCandidate(candidate, objectStore)
+      );
+      model = solved.model;
+      promptTokens += solved.usage.promptTokens ?? 0;
+      completionTokens += solved.usage.completionTokens ?? 0;
+      await updateSolvedCandidate(candidate.id, solved.candidate);
+      candidatesSolved += 1;
+    } catch (error) {
+      await markCandidateSolveFailed(candidate.id, error);
+      candidatesFailed += 1;
+    }
+  }
+
+  const usage = {
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens
+  };
+  const config = loadMistralConfigFromEnv(process.env);
+  await recordLlmBatchCost({
+    input,
+    model: model ?? config.solverModel,
+    operation: "question_solving",
+    usage,
+    batchMetadata: {
+      synchronous: true,
+      candidatesSubmitted: candidates.length,
+      candidatesSolved,
+      candidatesFailed
+    }
+  });
+
+  return {
+    candidatesSubmitted: candidates.length,
+    candidatesSolved,
+    candidatesFailed,
+    model: model ?? config.solverModel
+  };
+}
+
 async function persistExtractedCandidates(input: PaperIngestionWorkflowInput, extraction: QuestionExtractionResult) {
   let candidatesCreated = 0;
   let candidatesUpdated = 0;

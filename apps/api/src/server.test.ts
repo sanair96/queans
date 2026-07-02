@@ -8,6 +8,7 @@ const apiConfig: ApiConfig = {
   API_PORT: 4000,
   APP_URL: "http://localhost:3000",
   INTERNAL_API_TOKEN: "test-internal-token",
+  MISTRAL_EXECUTION_MODE: "sync",
   TEMPORAL_ADDRESS: "localhost:7233",
   TEMPORAL_NAMESPACE: "default",
   TEMPORAL_TASK_QUEUE_PAPER_INGESTION: "paper-ingestion",
@@ -101,7 +102,7 @@ describe("buildServer", () => {
         issues: [
           {
             path: ["mimeType"],
-            message: "Only PDF uploads are supported by the current OCR pipeline."
+            message: "Only PDF, DOCX, PPTX, or ODT uploads are supported by the current OCR pipeline."
           }
         ]
       });

@@ -1,6 +1,13 @@
 import { z } from "zod";
 
-import type { ExtractedQuestionCandidate, OcrImage, OcrPage, OcrResult, QuestionExtractionResult } from "./types.js";
+import type {
+  ExtractedQuestionCandidate,
+  OcrImage,
+  OcrPage,
+  OcrResult,
+  QuestionExtractionResult,
+  QuestionSolvingResult
+} from "./types.js";
 
 export interface MistralConfig {
   apiKey: string;
@@ -448,6 +455,61 @@ export class MistralQuestionExtractor {
       provider: "mistral",
       model: this.config.extractorModel,
       candidates: parseMistralExtractionContent(firstChoice.message.content),
+      rawJson: raw,
+      usage: {
+        promptTokens: completion.usage?.prompt_tokens,
+        completionTokens: completion.usage?.completion_tokens,
+        totalTokens: completion.usage?.total_tokens
+      }
+    };
+  }
+
+  async solveCandidate(
+    candidate: ExtractedQuestionCandidate,
+    imageUrls: Array<{ url: string; label: string }>
+  ): Promise<QuestionSolvingResult> {
+    const raw = await callMistral(this.config.apiKey, "/v1/chat/completions", {
+      model: this.config.solverModel,
+      temperature: 0,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "solved_question_candidate",
+          strict: true,
+          schema: questionSolvingJsonSchema
+        }
+      },
+      messages: [
+        {
+          role: "system",
+          content:
+            "Repair incomplete OCR-grounded questions only when the source evidence supports the repair, then solve. If the question, answer, or diagram is too incomplete or uncertain, keep the uncertainty explicit with validation_errors. Return JSON matching the schema."
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: buildSolvingPrompt(candidate, imageUrls)
+            },
+            ...imageUrls.map((image) => ({
+              type: "image_url" as const,
+              image_url: image.url
+            }))
+          ]
+        }
+      ]
+    });
+    const completion = chatCompletionSchema.parse(raw);
+    const firstChoice = completion.choices[0];
+    if (!firstChoice) {
+      throw new Error("Mistral solving returned no choices");
+    }
+
+    return {
+      provider: "mistral",
+      model: this.config.solverModel,
+      candidate: parseMistralSolvingContent(firstChoice.message.content),
       rawJson: raw,
       usage: {
         promptTokens: completion.usage?.prompt_tokens,

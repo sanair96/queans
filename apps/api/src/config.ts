@@ -1,10 +1,13 @@
 import { z } from "zod";
 
+import { defaultMistralExecutionMode, mistralExecutionModes } from "@queans/core";
+
 const configSchema = z.object({
   NODE_ENV: z.string().default("development"),
   API_PORT: z.coerce.number().int().positive().default(4000),
   APP_URL: z.string().url().default("http://localhost:3000"),
   INTERNAL_API_TOKEN: z.string().trim().min(1),
+  MISTRAL_EXECUTION_MODE: z.enum(mistralExecutionModes).default(defaultMistralExecutionMode),
   TEMPORAL_ADDRESS: z.string().min(1).default("localhost:7233"),
   TEMPORAL_NAMESPACE: z.string().min(1).default("default"),
   TEMPORAL_TASK_QUEUE_PAPER_INGESTION: z.string().min(1).default("paper-ingestion"),

@@ -80,3 +80,15 @@ export interface QuestionExtractionResult {
     totalTokens?: number | undefined;
   };
 }
+
+export interface QuestionSolvingResult {
+  provider: "mistral";
+  model: string;
+  candidate: ExtractedQuestionCandidate;
+  rawJson: unknown;
+  usage: {
+    promptTokens?: number | undefined;
+    completionTokens?: number | undefined;
+    totalTokens?: number | undefined;
+  };
+}

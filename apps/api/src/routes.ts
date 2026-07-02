@@ -3,6 +3,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 import {
+  type MistralExecutionMode,
   reviewPatchSchema,
   reviewReasonCodes,
   summarizeWorkflowFailure,
@@ -417,7 +418,8 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
     const retryRun = await createRetryWorkflowRun({
       sourcePaper: run.sourcePaper,
       config,
-      retryOfWorkflowRunId: run.id
+      retryOfWorkflowRunId: run.id,
+      retryOfWorkflowRunInputPayload: run.inputPayload
     });
     dispatchPendingWorkflowStarts(config).catch((error: unknown) => {
       request.log.error({ error }, "Workflow dispatch failed after ingestion retry");
@@ -453,6 +455,7 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
       sourcePaper: batchJob.sourcePaper,
       config,
       retryOfWorkflowRunId: batchJob.workflowRunId,
+      retryOfWorkflowRunInputPayload: batchJob.workflowRun.inputPayload,
       retryImportBatchJobId: batchJob.id,
       retryImportOperation: providerBatchRetryOperation(batchJob.operation)
     });
@@ -639,7 +642,10 @@ export function paperIngestionInputPayload(input: {
   retryImportOperation?: "ocr" | "question_segmentation" | "question_solving" | undefined;
   config: Pick<
     ApiConfig,
-    "TEMPORAL_TASK_QUEUE_PAPER_INGESTION" | "TEMPORAL_TASK_QUEUE_OCR" | "TEMPORAL_TASK_QUEUE_LLM"
+    | "TEMPORAL_TASK_QUEUE_PAPER_INGESTION"
+    | "TEMPORAL_TASK_QUEUE_OCR"
+    | "TEMPORAL_TASK_QUEUE_LLM"
+    | "MISTRAL_EXECUTION_MODE"
   >;
 }) {
   const payload = {
@@ -647,6 +653,9 @@ export function paperIngestionInputPayload(input: {
     uploadObjectId: input.uploadObjectId,
     objectKey: input.objectKey,
     paperContext: input.paperContext,
+    executionMode: input.retryImportBatchJobId
+      ? "batch"
+      : input.config.MISTRAL_EXECUTION_MODE,
     taskQueues: {
       paperIngestion: input.config.TEMPORAL_TASK_QUEUE_PAPER_INGESTION,
       ocr: input.config.TEMPORAL_TASK_QUEUE_OCR,
@@ -830,6 +839,7 @@ async function createRetryWorkflowRun(input: {
   };
   config: ApiConfig;
   retryOfWorkflowRunId: string;
+  retryOfWorkflowRunInputPayload: Prisma.JsonValue;
   retryImportBatchJobId?: string | undefined;
   retryImportOperation?: "ocr" | "question_segmentation" | "question_solving" | undefined;
 }) {
@@ -853,7 +863,10 @@ async function createRetryWorkflowRun(input: {
           paperContext: paperContextPayloadFromSourcePaper(input.sourcePaper),
           retryImportBatchJobId: input.retryImportBatchJobId,
           retryImportOperation: input.retryImportOperation,
-          config: input.config
+          config: {
+            ...input.config,
+            MISTRAL_EXECUTION_MODE: retryExecutionMode(input)
+          }
         })
       }
     });
@@ -871,6 +884,28 @@ async function createRetryWorkflowRun(input: {
     });
     return run;
   });
+}
+
+function retryExecutionMode(input: {
+  retryOfWorkflowRunInputPayload: Prisma.JsonValue;
+  retryImportBatchJobId?: string | undefined;
+  config: Pick<ApiConfig, "MISTRAL_EXECUTION_MODE">;
+}): MistralExecutionMode {
+  if (input.retryImportBatchJobId) {
+    return "batch";
+  }
+
+  const previousMode = executionModeFromPayload(input.retryOfWorkflowRunInputPayload);
+  return previousMode ?? input.config.MISTRAL_EXECUTION_MODE;
+}
+
+function executionModeFromPayload(payload: Prisma.JsonValue): MistralExecutionMode | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return undefined;
+  }
+
+  const mode = (payload as Record<string, unknown>).executionMode;
+  return mode === "sync" || mode === "batch" ? mode : undefined;
 }
 
 function canRetryWorkflowRun(status: WorkflowStatus, force: boolean) {

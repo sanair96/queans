@@ -18,6 +18,7 @@ const apiConfig: ApiConfig = {
   API_PORT: 4000,
   APP_URL: "http://localhost:3000",
   INTERNAL_API_TOKEN: "test-internal-token",
+  MISTRAL_EXECUTION_MODE: "sync",
   TEMPORAL_ADDRESS: "localhost:7233",
   TEMPORAL_NAMESPACE: "default",
   TEMPORAL_TASK_QUEUE_PAPER_INGESTION: "paper-ingestion",

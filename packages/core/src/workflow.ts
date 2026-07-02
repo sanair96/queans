@@ -4,6 +4,10 @@ export const PAPER_LLM_TASK_QUEUE = "paper-llm-extraction";
 
 export const PAPER_INGESTION_WORKFLOW_TYPE = "PaperIngestionWorkflow";
 
+export const mistralExecutionModes = ["sync", "batch"] as const;
+export type MistralExecutionMode = (typeof mistralExecutionModes)[number];
+export const defaultMistralExecutionMode = "sync" satisfies MistralExecutionMode;
+
 export function paperIngestionWorkflowId(ingestionRunId: string) {
   return `paper-ingestion/${ingestionRunId}`;
 }
@@ -36,6 +40,7 @@ export type PaperIngestionStep = (typeof paperIngestionSteps)[number];
 export interface PaperIngestionWorkflowInput {
   ingestionRunId: string;
   sourcePaperId: string;
+  executionMode?: MistralExecutionMode | undefined;
   retryImportBatchJobId?: string | undefined;
   retryImportOperation?: "ocr" | "question_segmentation" | "question_solving" | undefined;
   taskQueues?: {

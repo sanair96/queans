@@ -39,15 +39,20 @@ describe("uploadCompleteSchema", () => {
 });
 
 describe("uploadInitSchema", () => {
-  it("accepts PDF uploads within the OCR size limit", () => {
+  it.each([
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.oasis.opendocument.text"
+  ])("accepts %s uploads within the OCR size limit", (mimeType) => {
     expect(
       uploadInitSchema.parse({
-        fileName: "paper.pdf",
-        mimeType: "application/pdf",
+        fileName: "paper",
+        mimeType,
         byteSize: maxUploadByteSize
       })
     ).toMatchObject({
-      mimeType: "application/pdf",
+      mimeType,
       byteSize: maxUploadByteSize
     });
   });
@@ -59,7 +64,7 @@ describe("uploadInitSchema", () => {
         mimeType: "image/png",
         byteSize: 1024
       })
-    ).toThrow("Only PDF uploads are supported by the current OCR pipeline.");
+    ).toThrow("Only PDF, DOCX, PPTX, or ODT uploads are supported by the current OCR pipeline.");
   });
 
   it("rejects files over the OCR size limit", () => {

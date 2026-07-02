@@ -1,7 +1,14 @@
 import { z } from "zod";
 
 export const maxUploadByteSize = 50 * 1024 * 1024;
-export const supportedUploadMimeTypes = ["application/pdf"] as const;
+export const supportedUploadMimeTypes = [
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.oasis.opendocument.text"
+] as const;
+
+export const supportedUploadTypeLabel = "PDF, DOCX, PPTX, or ODT";
 
 export const paperContextSchema = z.object({
   title: z.string().trim().min(1).optional(),
@@ -18,7 +25,7 @@ export const paperContextSchema = z.object({
 export const uploadInitSchema = z.object({
   fileName: z.string().min(1),
   mimeType: z.enum(supportedUploadMimeTypes, {
-    errorMap: () => ({ message: "Only PDF uploads are supported by the current OCR pipeline." })
+    errorMap: () => ({ message: `Only ${supportedUploadTypeLabel} uploads are supported by the current OCR pipeline.` })
   }),
   byteSize: z
     .number()

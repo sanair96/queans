@@ -29,8 +29,9 @@ import {
 const apiConfig = {
   TEMPORAL_TASK_QUEUE_PAPER_INGESTION: "paper-ingestion",
   TEMPORAL_TASK_QUEUE_OCR: "paper-ocr",
-  TEMPORAL_TASK_QUEUE_LLM: "paper-llm-extraction"
-};
+  TEMPORAL_TASK_QUEUE_LLM: "paper-llm-extraction",
+  MISTRAL_EXECUTION_MODE: "sync"
+} as const;
 
 describe("uploadCompletionPayload", () => {
   it("returns the latest ingestion run for an already completed upload", () => {
@@ -86,6 +87,7 @@ describe("paperIngestionInputPayload", () => {
         classLevel: "10",
         subject: "Mathematics"
       },
+      executionMode: "sync",
       taskQueues: {
         paperIngestion: "paper-ingestion",
         ocr: "paper-ocr",
@@ -106,6 +108,7 @@ describe("paperIngestionInputPayload", () => {
         config: apiConfig
       })
     ).toMatchObject({
+      executionMode: "batch",
       retryImportBatchJobId: "batch-job-1",
       retryImportOperation: "question_solving"
     });

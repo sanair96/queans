@@ -1,6 +1,7 @@
 import { condition, defineSignal, proxyActivities, setHandler } from "@temporalio/workflow";
 
 import {
+  defaultMistralExecutionMode,
   PAPER_LLM_TASK_QUEUE,
   PAPER_OCR_TASK_QUEUE,
   serializeWorkflowFailure,
@@ -64,62 +65,85 @@ export async function PaperIngestionWorkflow(input: PaperIngestionWorkflowInput)
     await app.recordStepStarted(input, "store_file");
     await app.recordStepSucceeded(input, "store_file", { sourcePaperId: input.sourcePaperId });
 
-    let shouldImportSolvingBatch = input.retryImportOperation === "question_solving";
+    const executionMode = input.retryImportBatchJobId ? "batch" : input.executionMode ?? defaultMistralExecutionMode;
 
-    if (!input.retryImportBatchJobId) {
-      currentStep = "submit_ocr_batch";
-      await app.recordStepStarted(input, "submit_ocr_batch");
-      const ocrBatch = await ocr.submitOcrBatch(input);
-      await app.recordStepSucceeded(input, "submit_ocr_batch", ocrBatch);
-    }
+    if (executionMode === "sync") {
+      currentStep = "run_ocr";
+      await app.recordStepStarted(input, "run_ocr");
+      const ocrResult = await ocr.runOcrAndPersist(input);
+      await app.recordStepSucceeded(input, "run_ocr", ocrResult);
 
-    if (!input.retryImportBatchJobId || input.retryImportOperation === "ocr") {
-      currentStep = "import_ocr_batch";
-      await app.recordStepStarted(input, "import_ocr_batch");
-      const ocrImport =
-        input.retryImportBatchJobId && input.retryImportOperation === "ocr"
-          ? await ocr.retryOcrBatchImport(input, input.retryImportBatchJobId)
-          : await ocr.importOcrBatchAndPersist(input);
-      await app.recordStepSucceeded(input, "import_ocr_batch", ocrImport);
-    }
+      currentStep = "extract_question_candidates";
+      await app.recordStepStarted(input, "extract_question_candidates");
+      const extraction = await llm.extractQuestionsAndPersist(input);
+      await app.recordStepSucceeded(input, "extract_question_candidates", extraction);
 
-    if (!input.retryImportBatchJobId || input.retryImportOperation === "ocr") {
-      currentStep = "submit_segmentation_batch";
-      await app.recordStepStarted(input, "submit_segmentation_batch");
-      const segmentationBatch = await llm.submitSegmentationBatch(input);
-      await app.recordStepSucceeded(input, "submit_segmentation_batch", segmentationBatch);
-    }
+      currentStep = "enrich_with_topics_and_answers";
+      await app.recordStepStarted(input, "enrich_with_topics_and_answers");
+      const solving = await llm.solveQuestionsAndPersist(input);
+      await app.recordStepSucceeded(input, "enrich_with_topics_and_answers", solving);
+    } else {
+      let shouldImportSolvingBatch = input.retryImportOperation === "question_solving";
 
-    if (!input.retryImportBatchJobId || input.retryImportOperation === "ocr" || input.retryImportOperation === "question_segmentation") {
-      currentStep = "import_segmentation_batch";
-      await app.recordStepStarted(input, "import_segmentation_batch");
-      const segmentation =
-        input.retryImportBatchJobId && input.retryImportOperation === "question_segmentation"
-          ? await llm.retryLlmBatchImport(input, input.retryImportBatchJobId)
-          : await llm.importSegmentationBatchAndPersist(input);
-      await app.recordStepSucceeded(input, "import_segmentation_batch", segmentation);
-    }
+      if (!input.retryImportBatchJobId) {
+        currentStep = "submit_ocr_batch";
+        await app.recordStepStarted(input, "submit_ocr_batch");
+        const ocrBatch = await ocr.submitOcrBatch(input);
+        await app.recordStepSucceeded(input, "submit_ocr_batch", ocrBatch);
+      }
 
-    if (
-      !input.retryImportBatchJobId ||
-      input.retryImportOperation === "ocr" ||
-      input.retryImportOperation === "question_segmentation"
-    ) {
-      currentStep = "submit_solving_batch";
-      await app.recordStepStarted(input, "submit_solving_batch");
-      const solvingBatch = await llm.submitSolvingBatch(input);
-      await app.recordStepSucceeded(input, "submit_solving_batch", solvingBatch);
-      shouldImportSolvingBatch = !("skipped" in solvingBatch);
-    }
+      if (!input.retryImportBatchJobId || input.retryImportOperation === "ocr") {
+        currentStep = "import_ocr_batch";
+        await app.recordStepStarted(input, "import_ocr_batch");
+        const ocrImport =
+          input.retryImportBatchJobId && input.retryImportOperation === "ocr"
+            ? await ocr.retryOcrBatchImport(input, input.retryImportBatchJobId)
+            : await ocr.importOcrBatchAndPersist(input);
+        await app.recordStepSucceeded(input, "import_ocr_batch", ocrImport);
+      }
 
-    if (shouldImportSolvingBatch) {
-      currentStep = "import_solving_batch";
-      await app.recordStepStarted(input, "import_solving_batch");
-      const solving =
-        input.retryImportBatchJobId && input.retryImportOperation === "question_solving"
-          ? await llm.retryLlmBatchImport(input, input.retryImportBatchJobId)
-          : await llm.importSolvingBatchAndPersist(input);
-      await app.recordStepSucceeded(input, "import_solving_batch", solving);
+      if (!input.retryImportBatchJobId || input.retryImportOperation === "ocr") {
+        currentStep = "submit_segmentation_batch";
+        await app.recordStepStarted(input, "submit_segmentation_batch");
+        const segmentationBatch = await llm.submitSegmentationBatch(input);
+        await app.recordStepSucceeded(input, "submit_segmentation_batch", segmentationBatch);
+      }
+
+      if (
+        !input.retryImportBatchJobId ||
+        input.retryImportOperation === "ocr" ||
+        input.retryImportOperation === "question_segmentation"
+      ) {
+        currentStep = "import_segmentation_batch";
+        await app.recordStepStarted(input, "import_segmentation_batch");
+        const segmentation =
+          input.retryImportBatchJobId && input.retryImportOperation === "question_segmentation"
+            ? await llm.retryLlmBatchImport(input, input.retryImportBatchJobId)
+            : await llm.importSegmentationBatchAndPersist(input);
+        await app.recordStepSucceeded(input, "import_segmentation_batch", segmentation);
+      }
+
+      if (
+        !input.retryImportBatchJobId ||
+        input.retryImportOperation === "ocr" ||
+        input.retryImportOperation === "question_segmentation"
+      ) {
+        currentStep = "submit_solving_batch";
+        await app.recordStepStarted(input, "submit_solving_batch");
+        const solvingBatch = await llm.submitSolvingBatch(input);
+        await app.recordStepSucceeded(input, "submit_solving_batch", solvingBatch);
+        shouldImportSolvingBatch = !("skipped" in solvingBatch);
+      }
+
+      if (shouldImportSolvingBatch) {
+        currentStep = "import_solving_batch";
+        await app.recordStepStarted(input, "import_solving_batch");
+        const solving =
+          input.retryImportBatchJobId && input.retryImportOperation === "question_solving"
+            ? await llm.retryLlmBatchImport(input, input.retryImportBatchJobId)
+            : await llm.importSolvingBatchAndPersist(input);
+        await app.recordStepSucceeded(input, "import_solving_batch", solving);
+      }
     }
 
     currentStep = "dedupe_check";

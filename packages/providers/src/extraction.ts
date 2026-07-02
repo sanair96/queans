@@ -1,5 +1,5 @@
 import { loadMistralConfigFromEnv, MistralQuestionExtractor } from "./mistral.js";
-import type { OcrPage, QuestionExtractionResult } from "./types.js";
+import type { ExtractedQuestionCandidate, OcrPage, QuestionExtractionResult, QuestionSolvingResult } from "./types.js";
 
 export const supportedQuestionExtractorProviders = ["mistral"] as const;
 
@@ -7,6 +7,10 @@ export type QuestionExtractorProvider = (typeof supportedQuestionExtractorProvid
 
 export interface QuestionExtractor {
   extractFromPages(pages: OcrPage[]): Promise<QuestionExtractionResult>;
+  solveCandidate(
+    candidate: ExtractedQuestionCandidate,
+    imageUrls: Array<{ url: string; label: string }>
+  ): Promise<QuestionSolvingResult>;
 }
 
 export function loadQuestionExtractorProviderFromEnv(env: NodeJS.ProcessEnv): QuestionExtractorProvider {

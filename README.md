@@ -54,7 +54,9 @@ Use a long random value for `INTERNAL_API_TOKEN` outside local development. It i
 
 Leave `R2_ENDPOINT` empty for the standard Cloudflare R2 endpoint; the provider derives it from `R2_ACCOUNT_ID`, and it also normalizes the copied `<account-id>` placeholder to that derived endpoint. Set it only when using a custom S3-compatible endpoint. `R2_PRESIGN_EXPIRES_SECONDS` defaults to `900` and must stay between `1` and `604800`.
 
-Uploads are limited to PDFs of 50 MB or smaller because the current OCR activity uses Mistral's URL-based PDF OCR path.
+`MISTRAL_EXECUTION_MODE=sync` is the default local/pre-billing path. It uses the synchronous Mistral OCR and chat endpoints for OCR, segmentation, and solving so real question papers can be processed before provider batch billing is enabled. Set `MISTRAL_EXECUTION_MODE=batch` only after batch API access is available; batch mode preserves provider batch-job tracking and import retries.
+
+Uploads are limited to supported OCR documents of 50 MB or smaller. The app currently accepts PDF, DOCX, PPTX, and ODT source files.
 
 The API and worker load `.env` automatically in local development. The shared DB package resolves the workspace root `.env` before Prisma initializes, so package-scoped commands from `apps/api`, `apps/worker`, or `packages/db` use the same database URL. Shell-provided values still override `.env`, which is useful when running the Docker database on a non-default host port.
 

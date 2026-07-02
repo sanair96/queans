@@ -8,9 +8,18 @@ import { assertOk } from "./api-errors";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 const maxUploadByteSize = 50 * 1024 * 1024;
-const missingUploadFileMessage = "Choose a PDF before uploading.";
-const unsupportedUploadTypeMessage = "Only PDF uploads are supported.";
-const oversizedUploadFileMessage = "Choose a PDF that is 50 MB or smaller.";
+const supportedDocumentTypes = [
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.oasis.opendocument.text"
+] as const;
+const supportedDocumentAccept =
+  "application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.oasis.opendocument.text,.pdf,.docx,.pptx,.odt";
+const supportedDocumentLabel = "PDF, DOCX, PPTX, or ODT";
+const missingUploadFileMessage = `Choose a ${supportedDocumentLabel} document before uploading.`;
+const unsupportedUploadTypeMessage = `Only ${supportedDocumentLabel} uploads are supported.`;
+const oversizedUploadFileMessage = `Choose a ${supportedDocumentLabel} document that is 50 MB or smaller.`;
 
 interface UploadInitResponse {
   uploadId: string;
@@ -94,12 +103,12 @@ export function UploadPanel() {
           <UploadCloud size={42} aria-hidden="true" />
           <div>
             <h2>Source file</h2>
-            <p className="muted">PDF question paper, 50 MB or smaller.</p>
+            <p className="muted">Question paper document, 50 MB or smaller.</p>
           </div>
           <input
             className="file-input"
             type="file"
-            accept="application/pdf"
+            accept={supportedDocumentAccept}
             onChange={(event) => setFile(event.target.files?.[0] ?? null)}
           />
           <button className="btn" type="button" onClick={() => void upload()} disabled={busy}>
@@ -131,7 +140,7 @@ export function uploadFileValidationMessage(file: Pick<File, "type" | "size"> | 
     return missingUploadFileMessage;
   }
 
-  if (file.type !== "application/pdf") {
+  if (!supportedDocumentTypes.some((mimeType) => mimeType === file.type)) {
     return unsupportedUploadTypeMessage;
   }
 
