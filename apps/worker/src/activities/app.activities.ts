@@ -729,6 +729,16 @@ function candidatePatchFromReviewPayload(value: Prisma.JsonValue): Prisma.Questi
   if ("questionType" in candidate && typeof candidate.questionType === "string" && isReviewedQuestionType(candidate.questionType)) {
     patch.questionType = candidate.questionType;
   }
+  if ("options" in candidate) {
+    if (candidate.options === null) {
+      patch.options = Prisma.JsonNull;
+    } else {
+      const reviewedOptions = reviewedMcqOptions(candidate.options);
+      if (reviewedOptions) {
+        patch.options = toInputJson(reviewedOptions);
+      }
+    }
+  }
   if ("answerSourceType" in candidate && candidate.answerSourceType === "SOURCE_KEY") {
     patch.answerSourceType = candidate.answerSourceType;
     patch.answerSourceBacked = true;
@@ -761,4 +771,13 @@ const reviewedQuestionTypes = [
 
 function isReviewedQuestionType(value: string): value is (typeof reviewedQuestionTypes)[number] {
   return reviewedQuestionTypes.some((questionType) => questionType === value);
+}
+
+function reviewedMcqOptions(value: unknown) {
+  if (!Array.isArray(value) || value.length < 2) {
+    return undefined;
+  }
+
+  const options = value.map((item) => (typeof item === "string" ? item.trim() : ""));
+  return options.every((option) => option.length > 0) ? options : undefined;
 }

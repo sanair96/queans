@@ -52,10 +52,10 @@ describe("apiErrorDetail", () => {
     expect(
       apiErrorDetail({
         error: "REVIEW_EDIT_APPROVAL_REQUIRES_STRUCTURAL_FIX",
-        blockingReasons: ["MCQ_OPTIONS_MISSING", "DIAGRAM_ASSET_MISSING"]
+        blockingReasons: ["DIAGRAM_ASSET_MISSING"]
       })
     ).toBe(
-      "Save edits cannot approve this item yet. Resolve MCQ options missing and diagram asset missing before approving. Use another review decision until this structural editor is available."
+      "Save edits cannot approve this item yet. Resolve diagram asset missing before approving. Use another review decision until this structural editor is available."
     );
   });
 

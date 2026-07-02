@@ -623,7 +623,7 @@ const directApprovalBlockingReasonCodes = new Set<ReviewReasonCode>([
   "MCQ_CORRECT_ANSWER_MISSING",
   "DIAGRAM_ASSET_MISSING"
 ]);
-const editApprovalUnsupportedReasonCodes = new Set<ReviewReasonCode>(["MCQ_OPTIONS_MISSING", "DIAGRAM_ASSET_MISSING"]);
+const editApprovalUnsupportedReasonCodes = new Set<ReviewReasonCode>(["DIAGRAM_ASSET_MISSING"]);
 
 const mutableReviewStatuses = [ReviewStatus.OPEN, ReviewStatus.ASSIGNED] as const;
 

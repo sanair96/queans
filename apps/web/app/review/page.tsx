@@ -19,6 +19,7 @@ interface ReviewItem {
     rawOcrText: string;
     cleanedQuestionText: string;
     answerText: string | null;
+    options: unknown;
     solutionText: string | null;
     difficulty: string | null;
     marks: number | null;

@@ -418,14 +418,14 @@ describe("reviewEditApprovalConflictPayload", () => {
       error: "REVIEW_EDIT_APPROVAL_REQUIRES_STRUCTURAL_FIX",
       message:
         "Save edits cannot resolve this review item's structural requirements yet. Use another review decision or add structural editor support before approving.",
-      blockingReasons: ["MCQ_OPTIONS_MISSING", "DIAGRAM_ASSET_MISSING"]
+      blockingReasons: ["DIAGRAM_ASSET_MISSING"]
     });
   });
 
   it("allows edited approval when schema-backed fields can resolve the review reasons", () => {
     expect(
       reviewEditApprovalConflictPayload({
-        reasonCodes: ["MISSING_REQUIRED_FIELD", "MISSING_MARKS", "LOW_FIELD_CONFIDENCE"]
+        reasonCodes: ["MISSING_REQUIRED_FIELD", "MISSING_MARKS", "MCQ_OPTIONS_MISSING", "LOW_FIELD_CONFIDENCE"]
       })
     ).toBeUndefined();
   });

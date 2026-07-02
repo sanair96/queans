@@ -25,6 +25,7 @@ interface ReviewItem {
     rawOcrText: string;
     cleanedQuestionText: string;
     answerText: string | null;
+    options: unknown;
     solutionText: string | null;
     difficulty: string | null;
     marks: number | null;
@@ -41,6 +42,7 @@ interface ReviewWorkbenchProps {
 interface ReviewDraft {
   cleanedQuestionText: string;
   questionType: string;
+  optionsText: string;
   answerText: string;
   solutionText: string;
   marks: string;
@@ -239,6 +241,15 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
                 ))}
               </select>
             </label>
+            {draft.questionType === "MCQ" ? (
+              <label>
+                MCQ options
+                <textarea
+                  value={draft.optionsText}
+                  onChange={(event) => setDraft((current) => ({ ...current, optionsText: event.target.value }))}
+                />
+              </label>
+            ) : null}
             <label>
               Answer
               <textarea
@@ -288,6 +299,7 @@ function draftFromItem(item: ReviewItem | undefined): ReviewDraft {
   return {
     cleanedQuestionText: item?.candidate.cleanedQuestionText ?? "",
     questionType: item?.candidate.questionType ?? "UNKNOWN",
+    optionsText: optionsTextFromValue(item?.candidate.options),
     answerText: item?.candidate.answerText ?? "",
     solutionText: item?.candidate.solutionText ?? "",
     marks: item?.candidate.marks === null || item?.candidate.marks === undefined ? "" : String(item.candidate.marks),
@@ -304,6 +316,7 @@ function reviewPatchBody(item: ReviewItem, draft: ReviewDraft, decision: ReviewD
           candidate: {
             cleanedQuestionText: draft.cleanedQuestionText,
             questionType: draft.questionType,
+            options: parseOptionsDraft(draft.optionsText, draft.questionType),
             answerText: draft.answerText,
             solutionText: draft.solutionText,
             marks: parseMarksDraft(draft.marks),
@@ -325,6 +338,7 @@ function correctionsFromDraft(item: ReviewItem, draft: ReviewDraft) {
   return [
     correction("cleanedQuestionText", item.candidate.cleanedQuestionText, draft.cleanedQuestionText, "OCR_ERROR"),
     correction("questionType", item.candidate.questionType, draft.questionType, "FORMATTING_ISSUE"),
+    correction("options", optionsTextFromValue(item.candidate.options), draft.optionsText, "FORMATTING_ISSUE"),
     correction("answerText", item.candidate.answerText ?? "", draft.answerText, "WRONG_ANSWER"),
     correction("solutionText", item.candidate.solutionText ?? "", draft.solutionText, "BAD_SOLUTION"),
     correction("marks", item.candidate.marks === null ? "" : String(item.candidate.marks), draft.marks, "WRONG_MARKS"),
@@ -357,6 +371,63 @@ function parseMarksDraft(value: string) {
   }
 
   return marks;
+}
+
+function parseOptionsDraft(value: string, questionType: string) {
+  if (questionType !== "MCQ") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error("MCQ options are required for edited approvals.");
+  }
+
+  const options = trimmed.startsWith("[") ? parseJsonOptions(trimmed) : linesToOptions(trimmed);
+  if (options.length < 2) {
+    throw new Error("MCQ options require at least two choices.");
+  }
+
+  return options;
+}
+
+function parseJsonOptions(value: string) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("MCQ options JSON must be a string array.");
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error("MCQ options JSON must be a string array.");
+  }
+
+  const options = parsed.map((item) => (typeof item === "string" ? item.trim() : ""));
+  if (options.some((option) => option.length === 0)) {
+    throw new Error("MCQ options JSON must be a string array.");
+  }
+
+  return options;
+}
+
+function linesToOptions(value: string) {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function optionsTextFromValue(value: unknown) {
+  if (!value) {
+    return "";
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => (typeof item === "string" ? item : JSON.stringify(item))).join("\n");
+  }
+
+  return JSON.stringify(value, null, 2);
 }
 
 function formatReasons(value: unknown) {

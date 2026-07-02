@@ -99,10 +99,30 @@ describe("reviewPatchSchema", () => {
           candidate: {
             cleanedQuestionText: "What is inertia?",
             questionType: "SHORT_ANSWER",
+            options: null,
             answerText: "The tendency to resist change in motion.",
             solutionText: "",
             marks: 2,
             difficulty: "easy"
+          }
+        }
+      })
+    ).toMatchObject({
+      decision: "EDIT_AND_APPROVE"
+    });
+  });
+
+  it("accepts edit approval for MCQs with reviewed options", () => {
+    expect(
+      reviewPatchSchema.parse({
+        decision: "EDIT_AND_APPROVE",
+        reviewPayload: {
+          candidate: {
+            cleanedQuestionText: "Which gas do plants absorb?",
+            questionType: "MCQ",
+            options: ["Oxygen", "Carbon dioxide", "Nitrogen"],
+            answerText: "Carbon dioxide",
+            marks: 1
           }
         }
       })
@@ -171,6 +191,39 @@ describe("reviewPatchSchema", () => {
         }
       })
     ).toThrow("Marks are required for edit approval.");
+  });
+
+  it("rejects MCQ edit approval without reviewed options", () => {
+    expect(() =>
+      reviewPatchSchema.parse({
+        decision: "EDIT_AND_APPROVE",
+        reviewPayload: {
+          candidate: {
+            cleanedQuestionText: "Which gas do plants absorb?",
+            questionType: "MCQ",
+            answerText: "Carbon dioxide",
+            marks: 1
+          }
+        }
+      })
+    ).toThrow("MCQ options are required for edit approval.");
+  });
+
+  it("rejects MCQ edit approval with too few options", () => {
+    expect(() =>
+      reviewPatchSchema.parse({
+        decision: "EDIT_AND_APPROVE",
+        reviewPayload: {
+          candidate: {
+            cleanedQuestionText: "Which gas do plants absorb?",
+            questionType: "MCQ",
+            options: ["Carbon dioxide"],
+            answerText: "Carbon dioxide",
+            marks: 1
+          }
+        }
+      })
+    ).toThrow("MCQ options require at least two choices.");
   });
 
   it("does not require edit payloads for non-edit decisions", () => {

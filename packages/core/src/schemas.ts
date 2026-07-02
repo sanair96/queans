@@ -50,21 +50,36 @@ const reviewedQuestionTypeSchema = z.enum(
   }
 );
 
-const editAndApprovePayloadSchema = z.object({
-  candidate: z.object({
-    cleanedQuestionText: z.string().trim().min(1, "Question text is required for edit approval."),
-    questionType: reviewedQuestionTypeSchema,
-    answerText: z.string().trim().min(1, "Answer text is required for edit approval."),
-    solutionText: z.string().optional(),
-    marks: z
-      .number({
-        required_error: "Marks are required for edit approval.",
-        invalid_type_error: "Marks are required for edit approval."
-      })
-      .nonnegative("Marks must be a non-negative number."),
-    difficulty: z.string().optional()
+const reviewedMcqOptionsSchema = z
+  .array(z.string().trim().min(1, "MCQ options cannot be blank."))
+  .min(2, "MCQ options require at least two choices.");
+
+const editAndApprovePayloadSchema = z
+  .object({
+    candidate: z.object({
+      cleanedQuestionText: z.string().trim().min(1, "Question text is required for edit approval."),
+      questionType: reviewedQuestionTypeSchema,
+      options: reviewedMcqOptionsSchema.nullable().optional(),
+      answerText: z.string().trim().min(1, "Answer text is required for edit approval."),
+      solutionText: z.string().optional(),
+      marks: z
+        .number({
+          required_error: "Marks are required for edit approval.",
+          invalid_type_error: "Marks are required for edit approval."
+        })
+        .nonnegative("Marks must be a non-negative number."),
+      difficulty: z.string().optional()
+    })
   })
-});
+  .superRefine((value, context) => {
+    if (value.candidate.questionType === "MCQ" && value.candidate.options == null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["candidate", "options"],
+        message: "MCQ options are required for edit approval."
+      });
+    }
+  });
 
 export const reviewPatchSchema = z
   .object({

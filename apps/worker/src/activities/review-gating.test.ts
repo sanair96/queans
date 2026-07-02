@@ -69,18 +69,20 @@ describe("candidateUpdateForReviewedItem", () => {
     expect(
       candidateUpdateForReviewedItem("EDITED", "EDIT_AND_APPROVE", {
         candidate: {
-          cleanedQuestionText: "  What is inertia?  ",
-          questionType: "SHORT_ANSWER",
-          answerText: "  The tendency to resist a change in motion.  ",
+          cleanedQuestionText: "  Which gas do plants absorb?  ",
+          questionType: "MCQ",
+          options: [" Oxygen ", " Carbon dioxide ", "Nitrogen"],
+          answerText: "  Carbon dioxide  ",
           solutionText: "   ",
           marks: 2,
           difficulty: "  easy  "
         }
       })
     ).toEqual({
-      cleanedQuestionText: "What is inertia?",
-      questionType: "SHORT_ANSWER",
-      answerText: "The tendency to resist a change in motion.",
+      cleanedQuestionText: "Which gas do plants absorb?",
+      questionType: "MCQ",
+      options: ["Oxygen", "Carbon dioxide", "Nitrogen"],
+      answerText: "Carbon dioxide",
       solutionText: null,
       marks: 2,
       difficulty: "easy",
