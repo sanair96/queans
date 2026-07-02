@@ -20,6 +20,8 @@ import {
   reviewItemUpdateData,
   reviewReasonCodesFromJson,
   reviewSignalRunForItem,
+  sourcePaperCanQueueIngestionWhere,
+  sourcePaperQueuedForIngestionUpdate,
   uploadCompletionConflict,
   uploadCompletionPayload
 } from "./routes.js";
@@ -250,6 +252,23 @@ describe("isActiveIngestionStatus", () => {
     expect(isActiveIngestionStatus("COMPLETED")).toBe(false);
     expect(isActiveIngestionStatus("FAILED")).toBe(false);
     expect(isActiveIngestionStatus("CANCELLED")).toBe(false);
+  });
+});
+
+describe("sourcePaperCanQueueIngestionWhere", () => {
+  it("claims only source papers that are not already in an active ingestion state", () => {
+    expect(sourcePaperCanQueueIngestionWhere("source-paper-1")).toEqual({
+      id: "source-paper-1",
+      status: { in: ["UPLOADED", "COMPLETED", "FAILED", "CANCELLED"] }
+    });
+  });
+});
+
+describe("sourcePaperQueuedForIngestionUpdate", () => {
+  it("moves a claimed source paper into the queued state", () => {
+    expect(sourcePaperQueuedForIngestionUpdate()).toEqual({
+      status: "QUEUED"
+    });
   });
 });
 

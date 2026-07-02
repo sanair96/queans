@@ -198,7 +198,28 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
       return reply.code(202).send(ingestionQueuedPayload(activeRun));
     }
 
-    const workflowRun = await prisma.$transaction(async (tx) => {
+    const ingestion = await prisma.$transaction(async (tx) => {
+      const claim = await tx.sourcePaper.updateMany({
+        where: sourcePaperCanQueueIngestionWhere(sourcePaper.id),
+        data: sourcePaperQueuedForIngestionUpdate()
+      });
+
+      if (claim.count === 0) {
+        const existingRun = await tx.workflowRun.findFirst({
+          where: {
+            sourcePaperId: sourcePaper.id,
+            workflowType: "PAPER_INGESTION",
+            status: { in: activeIngestionStatuses() }
+          },
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            status: true
+          }
+        });
+        return existingRun ? { workflowRun: existingRun, claimed: false } : undefined;
+      }
+
       const run = await tx.workflowRun.create({
         data: {
           workflowType: "PAPER_INGESTION",
@@ -216,18 +237,20 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
         }
       });
       await tx.workflowStartOutbox.create({ data: { workflowRunId: run.id } });
-      await tx.sourcePaper.update({ where: { id: sourcePaper.id }, data: { status: "QUEUED" } });
-      return run;
+      return { workflowRun: run, claimed: true };
     });
 
-    dispatchPendingWorkflowStarts(config).catch((error: unknown) => {
-      request.log.error({ error }, "Workflow dispatch failed after manual ingestion start");
-    });
+    if (!ingestion) {
+      return reply.code(409).send({ error: "SOURCE_PAPER_INGESTION_ALREADY_ACTIVE" });
+    }
 
-    return reply.code(202).send({
-      ingestionRunId: workflowRun.id,
-      status: "QUEUED"
-    });
+    if (ingestion.claimed) {
+      dispatchPendingWorkflowStarts(config).catch((error: unknown) => {
+        request.log.error({ error }, "Workflow dispatch failed after manual ingestion start");
+      });
+    }
+
+    return reply.code(202).send(ingestionQueuedPayload(ingestion.workflowRun));
   });
 
   app.get<{ Params: IdParams }>("/api/ingestions/:id", async (request, reply) => {
@@ -557,6 +580,19 @@ export function isPrismaUniqueConstraintError(error: unknown) {
 
 export function activeIngestionStatuses() {
   return [WorkflowStatus.PENDING, WorkflowStatus.RUNNING, WorkflowStatus.WAITING_FOR_REVIEW];
+}
+
+export function sourcePaperCanQueueIngestionWhere(id: string) {
+  return {
+    id,
+    status: { in: ["UPLOADED", "COMPLETED", "FAILED", "CANCELLED"] }
+  } satisfies Prisma.SourcePaperWhereInput;
+}
+
+export function sourcePaperQueuedForIngestionUpdate() {
+  return {
+    status: "QUEUED"
+  } satisfies Prisma.SourcePaperUpdateManyMutationInput;
 }
 
 export function isActiveIngestionStatus(status: string) {
