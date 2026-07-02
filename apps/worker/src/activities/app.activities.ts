@@ -17,35 +17,75 @@ import { candidateOcrConfidence } from "./ocr-confidence.js";
 import { toInputJson } from "../json.js";
 
 export async function recordStepStarted(input: PaperIngestionWorkflowInput, stepName: PaperIngestionStep) {
-  await prisma.$transaction([
-    prisma.workflowStep.create({
-      data: {
-        workflowRunId: input.ingestionRunId,
-        stepName,
-        status: "RUNNING",
-        attemptCount: 1,
-        startedAt: new Date()
-      }
-    }),
-    prisma.workflowRun.update({
+  const runningStep = await prisma.workflowStep.findFirst({
+    where: runningWorkflowStepWhere(input, stepName),
+    orderBy: { startedAt: "desc" },
+    select: { id: true }
+  });
+
+  if (runningStep) {
+    await prisma.$transaction([
+      prisma.workflowRun.update({
+        where: { id: input.ingestionRunId },
+        data: workflowRunUpdateForStartedStep(stepName)
+      }),
+      prisma.sourcePaper.update({
+        where: { id: input.sourcePaperId },
+        data: sourcePaperUpdateForStartedWorkflowStep()
+      })
+    ]);
+    return { stepId: runningStep.id, reused: true };
+  }
+
+  const createdStep = await prisma.$transaction(async (tx) => {
+    const step = await tx.workflowStep.create({
+      data: workflowStepCreateData(input, stepName),
+      select: { id: true }
+    });
+    await tx.workflowRun.update({
       where: { id: input.ingestionRunId },
-      data: {
-        status: "RUNNING",
-        currentStep: stepName
-      }
-    }),
-    prisma.sourcePaper.update({
+      data: workflowRunUpdateForStartedStep(stepName)
+    });
+    await tx.sourcePaper.update({
       where: { id: input.sourcePaperId },
       data: sourcePaperUpdateForStartedWorkflowStep()
-    }),
-    prisma.workflowEvent.create({
+    });
+    await tx.workflowEvent.create({
       data: {
         workflowRunId: input.ingestionRunId,
         eventType: `${stepName.toUpperCase()}_STARTED`,
         eventPayload: {}
       }
-    })
-  ]);
+    });
+    return step;
+  });
+
+  return { stepId: createdStep.id, reused: false };
+}
+
+export function runningWorkflowStepWhere(input: PaperIngestionWorkflowInput, stepName: PaperIngestionStep) {
+  return {
+    workflowRunId: input.ingestionRunId,
+    stepName,
+    status: "RUNNING"
+  } satisfies Prisma.WorkflowStepWhereInput;
+}
+
+export function workflowStepCreateData(input: PaperIngestionWorkflowInput, stepName: PaperIngestionStep) {
+  return {
+    workflowRunId: input.ingestionRunId,
+    stepName,
+    status: "RUNNING",
+    attemptCount: 1,
+    startedAt: new Date()
+  } satisfies Prisma.WorkflowStepUncheckedCreateInput;
+}
+
+export function workflowRunUpdateForStartedStep(stepName: PaperIngestionStep) {
+  return {
+    status: "RUNNING",
+    currentStep: stepName
+  } satisfies Prisma.WorkflowRunUpdateInput;
 }
 
 export function sourcePaperUpdateForStartedWorkflowStep() {
