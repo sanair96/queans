@@ -263,21 +263,21 @@ export async function createReviewItemsForCandidates(input: PaperIngestionWorkfl
         },
         question_type: {
           confidence: fieldConfidence.question_type ?? 0,
-          present: candidate.questionType !== "UNKNOWN",
+          present: candidateQuestionTypePresent(candidate),
           required: true,
           sourceBacked: true
         },
         marks: {
           confidence: fieldConfidence.marks ?? 0,
           present: candidate.marks !== null,
-          required: true,
+          required: false,
           sourceBacked: true
         },
         answer_text: {
           confidence: fieldConfidence.answer_text ?? 0,
           present: candidate.answerText !== null,
           required: true,
-          sourceBacked: candidate.answerSourceBacked || candidate.answerSourceType === "SOURCE_KEY"
+          ...(candidate.answerSourceType === "SOURCE_KEY" ? { sourceBacked: candidate.answerSourceBacked } : {})
         },
         topic_id: {
           confidence: fieldConfidence.topic_id ?? fieldConfidence.topic ?? 0,
@@ -290,20 +290,18 @@ export async function createReviewItemsForCandidates(input: PaperIngestionWorkfl
           required: false
         }
       },
-      validationErrors: validationErrors(candidate.validationErrors),
+      validationErrors: validationErrorsForConfidence(candidate),
       mathOrDiagramUncertain: candidate.requiresDiagram && candidate.diagramAsset === null,
       generatedAnswer: candidate.answerSourceType === "LLM_GENERATED",
-      generatedAnswerValidated: candidate.answerSourceBacked
+      generatedAnswerValidated: isGeneratedAnswerConfident(candidate, fieldConfidence)
     });
 
     const gate = reviewGateForConfidenceDecision(result.decision);
     const candidateUpdate: Prisma.QuestionCandidateUpdateInput = {
       reviewStatus: gate.candidateStatus,
-      overallConfidence: result.overallConfidence
+      overallConfidence: result.overallConfidence,
+      validationErrors: toInputJson(result.reviewReasons)
     };
-    if (gate.recordReviewReasons) {
-      candidateUpdate.validationErrors = toInputJson(result.reviewReasons);
-    }
 
     await prisma.questionCandidate.update({
       where: { id: candidate.id },
@@ -493,11 +491,19 @@ export async function commitApprovedCandidates(input: PaperIngestionWorkflowInpu
           questionType: candidate.questionType,
           marks: candidate.marks,
           options: candidate.options === null ? Prisma.JsonNull : toInputJson(candidate.options),
+          parentQuestionNumber: candidate.parentQuestionNumber,
+          questionLabel: candidate.questionLabel,
+          partLabel: candidate.partLabel,
+          groupKey: candidate.groupKey,
+          stemText: candidate.stemText,
+          displayOrder: candidate.displayOrder,
           chapterId: candidate.chapterId,
           topicId: candidate.topicId,
           subtopicId: candidate.subtopicId,
           difficulty: candidate.difficulty,
           bloomLevel: candidate.bloomLevel,
+          requiresDiagram: candidate.requiresDiagram,
+          diagramAsset: candidate.diagramAsset === null ? Prisma.JsonNull : toInputJson(candidate.diagramAsset),
           status: "APPROVED",
           sourceEvidence: toInputJson(candidate.sourceEvidence ?? {})
         }
@@ -657,7 +663,38 @@ function confidenceRecord(value: Prisma.JsonValue) {
       record[key] = raw;
     }
   }
+  assignConfidenceAlias(record, "question_text", ["cleaned_question_text", "raw_ocr_text"]);
+  assignConfidenceAlias(record, "topic_id", ["topic"]);
+  assignConfidenceAlias(record, "answer_text", ["answer", "solution_text"]);
   return record;
+}
+
+function assignConfidenceAlias(record: Record<string, number>, target: string, aliases: string[]) {
+  if (record[target] !== undefined) {
+    return;
+  }
+
+  const confidence = aliases.map((alias) => record[alias]).find((value) => value !== undefined);
+  if (confidence !== undefined) {
+    record[target] = confidence;
+  }
+}
+
+function candidateQuestionTypePresent(candidate: { questionType: QuestionType; options: Prisma.JsonValue }) {
+  return candidate.questionType !== "UNKNOWN" || candidate.options !== null;
+}
+
+function isGeneratedAnswerConfident(candidate: { answerSourceBacked: boolean; validationErrors: Prisma.JsonValue }, fields: Record<string, number>) {
+  if (candidate.answerSourceBacked) {
+    return true;
+  }
+
+  const answerConfidence = fields.answer_text ?? 0;
+  return answerConfidence >= 0.86 && !validationErrors(candidate.validationErrors).some(isAnswerBlockingReason);
+}
+
+function isAnswerBlockingReason(reason: ReviewReasonCode) {
+  return reason === "ANSWER_UNCERTAIN" || reason === "LOW_ANSWER_CONFIDENCE" || reason === "LLM_GENERATED_ANSWER_UNVERIFIED";
 }
 
 function validationErrors(value: Prisma.JsonValue): ReviewReasonCode[] {
@@ -676,6 +713,22 @@ function validationErrors(value: Prisma.JsonValue): ReviewReasonCode[] {
       return undefined;
     })
     .filter((code): code is ReviewReasonCode => isReviewReason(code));
+}
+
+export function validationErrorsForConfidence(candidate: {
+  validationErrors: Prisma.JsonValue;
+  requiresDiagram: boolean;
+  diagramAsset: Prisma.JsonValue;
+}) {
+  return validationErrors(candidate.validationErrors).filter((reason) => {
+    if (reason === "LOW_OCR_CONFIDENCE") {
+      return false;
+    }
+    if (reason === "DIAGRAM_ASSET_MISSING" && (!candidate.requiresDiagram || candidate.diagramAsset !== null)) {
+      return false;
+    }
+    return true;
+  });
 }
 
 function isReviewReason(value: string | undefined): value is ReviewReasonCode {
@@ -815,6 +868,24 @@ function candidatePatchFromReviewPayload(value: Prisma.JsonValue): Prisma.Questi
   }
   if ("marks" in candidate && (typeof candidate.marks === "number" || candidate.marks === null)) {
     patch.marks = candidate.marks;
+  }
+  if ("parentQuestionNumber" in candidate && typeof candidate.parentQuestionNumber === "string") {
+    patch.parentQuestionNumber = nullableTrimmedString(candidate.parentQuestionNumber);
+  }
+  if ("questionLabel" in candidate && typeof candidate.questionLabel === "string") {
+    patch.questionLabel = nullableTrimmedString(candidate.questionLabel);
+  }
+  if ("partLabel" in candidate && typeof candidate.partLabel === "string") {
+    patch.partLabel = nullableTrimmedString(candidate.partLabel);
+  }
+  if ("groupKey" in candidate && typeof candidate.groupKey === "string") {
+    patch.groupKey = nullableTrimmedString(candidate.groupKey);
+  }
+  if ("stemText" in candidate && typeof candidate.stemText === "string") {
+    patch.stemText = nullableTrimmedString(candidate.stemText);
+  }
+  if ("displayOrder" in candidate && typeof candidate.displayOrder === "number") {
+    patch.displayOrder = candidate.displayOrder;
   }
   if ("questionType" in candidate && typeof candidate.questionType === "string" && isReviewedQuestionType(candidate.questionType)) {
     patch.questionType = candidate.questionType;

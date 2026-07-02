@@ -66,6 +66,12 @@ const editAndApprovePayloadSchema = z
     candidate: z.object({
       cleanedQuestionText: z.string().trim().min(1, "Question text is required for edit approval."),
       questionType: reviewedQuestionTypeSchema,
+      parentQuestionNumber: z.string().optional(),
+      questionLabel: z.string().optional(),
+      partLabel: z.string().optional(),
+      groupKey: z.string().optional(),
+      stemText: z.string().optional(),
+      displayOrder: z.number().int().optional(),
       options: reviewedMcqOptionsSchema.nullable().optional(),
       diagramAsset: z.unknown().optional(),
       answerText: z.string().trim().min(1, "Answer text is required for edit approval."),

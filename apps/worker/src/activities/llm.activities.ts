@@ -5,7 +5,6 @@ import { CandidateStatus, prisma, Prisma, QuestionType, ReviewReason } from "@qu
 import {
   loadMistralConfigFromEnv,
   loadR2ConfigFromEnv,
-  maxR2PresignExpiresSeconds,
   MistralBatchProvider,
   parseMistralChatCandidateBatchBody,
   parseMistralExtractionContent,
@@ -356,18 +355,23 @@ export async function solveQuestionsAndPersist(input: PaperIngestionWorkflowInpu
 
   const extractor = createQuestionExtractorFromEnv(process.env);
   const objectStore = new R2ObjectStore(loadR2ConfigFromEnv(process.env));
+  const solverRequestIntervalMs = solverRequestIntervalFromEnv(process.env);
   let candidatesSolved = 0;
   let candidatesFailed = 0;
   let promptTokens = 0;
   let completionTokens = 0;
   let model: string | undefined;
 
-  for (const candidate of candidates) {
+  for (const [index, candidate] of candidates.entries()) {
     try {
-      const solved = await extractor.solveCandidate(
-        candidateToExtracted(candidate),
-        await signedImageUrlsForCandidate(candidate, objectStore)
-      );
+      if (index > 0 && solverRequestIntervalMs > 0) {
+        await sleep(solverRequestIntervalMs);
+      }
+      const solved = await solveCandidateWithRetry({
+        extractor,
+        candidate: candidateToExtracted(candidate),
+        imageUrls: await signedImageUrlsForCandidate(candidate, objectStore)
+      });
       model = solved.model;
       promptTokens += solved.usage.promptTokens ?? 0;
       completionTokens += solved.usage.completionTokens ?? 0;
@@ -558,10 +562,68 @@ async function markCandidateSolveFailed(candidateId: string, error: unknown) {
       reviewStatus: CandidateStatus.NEEDS_REVIEW,
       validationErrors: toInputJson(["VALIDATION_FAILED", "ANSWER_UNCERTAIN"]),
       extractedPayload: toInputJson({
-        solveError: error
+        solveError: serializeSolveError(error)
       })
     }
   });
+}
+
+async function solveCandidateWithRetry(input: {
+  extractor: ReturnType<typeof createQuestionExtractorFromEnv>;
+  candidate: ExtractedQuestionCandidate;
+  imageUrls: Array<{ url: string; label: string }>;
+}) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await input.extractor.solveCandidate(input.candidate, input.imageUrls);
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        await sleep(attempt * 1500);
+      }
+    }
+  }
+
+  throw lastError;
+}
+
+function solverRequestIntervalFromEnv(env: NodeJS.ProcessEnv) {
+  const raw = env.MISTRAL_SOLVER_REQUEST_INTERVAL_MS?.trim();
+  if (!raw) {
+    return 15000;
+  }
+
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 15000;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function serializeSolveError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      cause: serializeErrorCause(error.cause)
+    };
+  }
+
+  return {
+    message: String(error)
+  };
+}
+
+function serializeErrorCause(cause: unknown) {
+  if (cause instanceof Error) {
+    return {
+      name: cause.name,
+      message: cause.message
+    };
+  }
+  return cause ?? null;
 }
 
 function candidatePersistenceData(
@@ -573,6 +635,12 @@ function candidatePersistenceData(
     sourcePageStart: candidate.sourcePageStart ?? null,
     sourcePageEnd: candidate.sourcePageEnd ?? null,
     questionNumber: candidate.questionNumber ?? null,
+    parentQuestionNumber: candidate.parentQuestionNumber ?? null,
+    questionLabel: candidate.questionLabel ?? null,
+    partLabel: candidate.partLabel ?? null,
+    groupKey: candidate.groupKey ?? null,
+    stemText: candidate.stemText ?? null,
+    displayOrder: candidate.displayOrder ?? null,
     sectionName: candidate.sectionName ?? null,
     rawOcrText: candidate.rawOcrText,
     cleanedQuestionText: candidate.cleanedQuestionText,
@@ -707,6 +775,9 @@ function mapQuestionType(value: string) {
   switch (normalized) {
     case "mcq":
     case "multiple_choice":
+    case "assertion":
+    case "assertion_reason":
+    case "assertion_reasoning":
       return QuestionType.MCQ;
     case "short_answer":
       return QuestionType.SHORT_ANSWER;
@@ -746,6 +817,11 @@ function reasonForCandidateField(fieldName: string, reasons: ExtractedQuestionCa
 async function loadOcrPages(sourcePaperId: string): Promise<OcrPage[]> {
   const pages = await prisma.ocrPage.findMany({
     where: { sourcePaperId },
+    include: {
+      ocrBlocks: {
+        orderBy: { createdAt: "asc" }
+      }
+    },
     orderBy: { pageNumber: "asc" }
   });
 
@@ -763,7 +839,14 @@ async function loadOcrPages(sourcePaperId: string): Promise<OcrPage[]> {
     height: page.height ?? undefined,
     dpi: page.dpi ?? undefined,
     rawJson: page.rawJson,
-    blocks: [],
+    blocks: page.ocrBlocks.map((block) => ({
+      blockType: block.blockType,
+      text: block.text,
+      confidence: block.confidence ?? undefined,
+      boundingBox: block.boundingBox ?? undefined,
+      sourceAsset: block.sourceAsset ?? undefined,
+      rawJson: block.rawJson ?? undefined
+    })),
     images: []
   }));
 }
@@ -846,6 +929,12 @@ function candidateToExtracted(
     sourcePageEnd: candidate.sourcePageEnd ?? undefined,
     rawOcrText: candidate.rawOcrText,
     cleanedQuestionText: candidate.cleanedQuestionText,
+    parentQuestionNumber: candidate.parentQuestionNumber ?? undefined,
+    questionLabel: candidate.questionLabel ?? undefined,
+    partLabel: candidate.partLabel ?? undefined,
+    groupKey: candidate.groupKey ?? undefined,
+    stemText: candidate.stemText ?? undefined,
+    displayOrder: candidate.displayOrder ?? undefined,
     questionType: candidate.questionType,
     marks: candidate.marks ?? undefined,
     options: candidate.options === null ? undefined : candidate.options,
@@ -868,6 +957,10 @@ async function signedImageUrlsForCandidate(
   candidate: Awaited<ReturnType<typeof prisma.questionCandidate.findMany>>[number],
   objectStore: R2ObjectStore
 ) {
+  if (!candidate.requiresDiagram) {
+    return [];
+  }
+
   const sourcePageStart = candidate.sourcePageStart ?? candidate.pageNumber;
   const sourcePageEnd = candidate.sourcePageEnd ?? sourcePageStart;
   if (!sourcePageStart || !sourcePageEnd) {
@@ -898,17 +991,24 @@ async function signedImageUrlsForCandidate(
 
   const imageUrls = [];
   for (const block of blocks) {
-    const objectKey = objectKeyFromSourceAsset(block.sourceAsset);
+    const sourceAsset = sourceAssetRecord(block.sourceAsset);
+    const objectKey = objectKeyFromSourceAsset(sourceAsset);
     if (!objectKey) {
       continue;
     }
+    const image = await objectStore.readObject(objectKey);
+    const mimeType = mimeTypeFromSourceAsset(sourceAsset) ?? image.contentType ?? "image/jpeg";
     imageUrls.push({
       label: `page ${block.ocrPage.pageNumber} ${block.text}`,
-      url: await objectStore.createPresignedRead(objectKey, maxR2PresignExpiresSeconds)
+      url: `data:${mimeType};base64,${Buffer.from(image.body).toString("base64")}`
     });
   }
 
   return imageUrls;
+}
+
+function sourceAssetRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
 }
 
 function objectKeyFromSourceAsset(value: unknown) {
@@ -918,6 +1018,15 @@ function objectKeyFromSourceAsset(value: unknown) {
 
   const record = value as Record<string, unknown>;
   return typeof record.objectKey === "string" ? record.objectKey : undefined;
+}
+
+function mimeTypeFromSourceAsset(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  return typeof record.mimeType === "string" ? record.mimeType : undefined;
 }
 
 function sourcePaperCustomId(sourcePaperId: string) {

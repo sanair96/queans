@@ -20,6 +20,9 @@ const mocks = vi.hoisted(() => {
     extractor: {
       solveCandidate: vi.fn()
     },
+    r2: {
+      readObject: vi.fn()
+    },
     prisma: {
       questionCandidate: {
         findMany: vi.fn(),
@@ -92,6 +95,14 @@ vi.mock("@queans/providers", () => ({
     createPresignedRead() {
       return Promise.resolve("https://r2.example/asset.png");
     }
+
+    async readObject(objectKey: string): Promise<{ objectKey: string; body: Uint8Array; contentType?: string | undefined }> {
+      return (await mocks.r2.readObject(objectKey)) as {
+        objectKey: string;
+        body: Uint8Array;
+        contentType?: string | undefined;
+      };
+    }
   },
   parseMistralChatCandidateBatchBody: vi.fn(),
   parseMistralExtractionContent: vi.fn(),
@@ -107,6 +118,11 @@ describe("solveQuestionsAndPersist", () => {
       callback(mocks.tx)
     );
     mocks.prisma.ocrBlock.findMany.mockResolvedValue([]);
+    mocks.r2.readObject.mockResolvedValue({
+      objectKey: "ocr-assets/source-1/page-1/image.png",
+      body: Uint8Array.from([104, 105]),
+      contentType: "image/png"
+    });
     mocks.tx.questionCandidate.findUnique.mockResolvedValue({
       id: "candidate-1",
       approvedQuestionId: null,
@@ -193,6 +209,61 @@ describe("solveQuestionsAndPersist", () => {
         }
       }
     });
+  });
+
+  it("passes stored OCR diagram images as model-readable data URLs", async () => {
+    mocks.prisma.questionCandidate.findMany.mockResolvedValue([
+      {
+        ...candidateRow,
+        requiresDiagram: true,
+        diagramAsset: { objectKey: "ocr-assets/source-1/page-1/image.png" }
+      }
+    ]);
+    mocks.prisma.ocrBlock.findMany.mockResolvedValue([
+      {
+        text: "img-0 circuit diagram",
+        sourceAsset: {
+          objectKey: "ocr-assets/source-1/page-1/image.png",
+          mimeType: "image/png"
+        },
+        ocrPage: {
+          pageNumber: 1
+        }
+      }
+    ]);
+    mocks.extractor.solveCandidate.mockResolvedValue({
+      provider: "mistral",
+      model: "mistral-large-latest",
+      candidate: {
+        ...solvedCandidate,
+        requiresDiagram: true,
+        diagramAsset: { objectKey: "ocr-assets/source-1/page-1/image.png" }
+      },
+      rawJson: { id: "completion-1" },
+      usage: {
+        promptTokens: 1000,
+        completionTokens: 500,
+        totalTokens: 1500
+      }
+    });
+
+    await solveQuestionsAndPersist({
+      ingestionRunId: "run-1",
+      sourcePaperId: "source-1"
+    });
+
+    expect(mocks.r2.readObject).toHaveBeenCalledWith("ocr-assets/source-1/page-1/image.png");
+    expect(mocks.extractor.solveCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requiresDiagram: true
+      }),
+      [
+        {
+          label: "page 1 img-0 circuit diagram",
+          url: "data:image/png;base64,aGk="
+        }
+      ]
+    );
   });
 });
 

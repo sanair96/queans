@@ -141,6 +141,12 @@ const extractionCandidateSchema = z.object({
   source_page_end: z.number().optional(),
   raw_ocr_text: z.string(),
   cleaned_question_text: z.string(),
+  parent_question_number: z.string().optional(),
+  question_label: z.string().optional(),
+  part_label: z.string().optional(),
+  group_key: z.string().optional(),
+  stem_text: z.string().optional(),
+  display_order: z.number().int().optional(),
   question_type: z.string(),
   marks: z.number().optional(),
   options: z.unknown().optional(),
@@ -222,6 +228,12 @@ const extractionResponseJsonSchema = {
           source_page_end: { type: "number" },
           raw_ocr_text: { type: "string" },
           cleaned_question_text: { type: "string" },
+          parent_question_number: { type: "string" },
+          question_label: { type: "string" },
+          part_label: { type: "string" },
+          group_key: { type: "string" },
+          stem_text: { type: "string" },
+          display_order: { type: "integer" },
           question_type: { type: "string" },
           marks: { type: "number" },
           options: {},
@@ -306,6 +318,9 @@ export class MistralBatchProvider {
     return {
       custom_id: input.customId,
       body: {
+        confidence_scores_granularity: "word",
+        table_format: "markdown",
+        include_image_base64: true,
         document: {
           type: "document_url",
           document_url: input.documentUrl
@@ -331,7 +346,7 @@ export class MistralBatchProvider {
           {
             role: "system",
             content:
-              "Segment OCR markdown into question candidates only. Do not answer or solve. Return JSON matching the schema. Keep each segment grounded in contiguous source pages and include every visible question, sub-question, mark, option, and diagram reference."
+              "Segment OCR markdown into question candidates only. Do not answer or solve. Return JSON matching the schema. Create one candidate for each answerable question or sub-question. Preserve section_name and visible question_number for every candidate. When a question has subparts, repeat the shared stem_text, set parent_question_number to the parent number, set part_label to the visible subpart label, use one shared group_key for all parts, and keep cleaned_question_text self-contained. Infer per-part marks from nearby section instructions such as '(2+3=5)', '(5 x 1 = 5 marks)', or '(2+3+2+3=10)' and put the specific candidate mark in marks. Include every visible option and diagram reference."
           },
           {
             role: "user",
@@ -374,7 +389,7 @@ export class MistralBatchProvider {
           {
             role: "system",
             content:
-              "Repair incomplete OCR-grounded questions only when the source evidence supports the repair, then solve. If the question, answer, or diagram is too incomplete or uncertain, keep the uncertainty explicit with validation_errors. Return JSON matching the schema."
+              "Repair incomplete OCR-grounded questions only when the source evidence supports the repair, then solve. Preserve section_name, question_number, grouping fields, marks, options, and diagram_asset from the candidate unless the evidence clearly improves them. Use answer_source_type=SOURCE_KEY only when an answer or answer key is directly present in the OCR source; otherwise use LLM_GENERATED. If the question, answer, or diagram is too incomplete or uncertain, keep the uncertainty explicit with validation_errors. Return JSON matching the schema."
           },
           {
             role: "user",
@@ -435,10 +450,10 @@ export class MistralQuestionExtractor {
         }
       },
       messages: [
-        {
-          role: "system",
-          content:
-            "Extract question candidates from OCR markdown. Return only JSON matching the provided schema. Use the exact snake_case field names from the schema. field_confidence must be an object keyed by field name with numeric confidence values, not a single number. Include chapter, topic, subtopic, validation_errors, source_evidence, answer_source_type, answer_source_backed, and whether diagrams are required. validation_errors must use only the enum codes from the schema; use VALIDATION_FAILED for non-canonical extraction problems. Use answer_source_type=SOURCE_KEY only when the answer is directly present in the OCR source; otherwise use LLM_GENERATED and do not hide uncertainty."
+          {
+            role: "system",
+            content:
+            "Extract question candidates from OCR markdown. Return only JSON matching the provided schema. Use the exact snake_case field names from the schema. Create one candidate per answerable item. Preserve section_name and visible question_number for every candidate. For subquestions, set a stable group_key shared by the parent and parts, parent_question_number, part_label, question_label, stem_text, and display_order. cleaned_question_text must be self-contained enough to solve without the rest of the paper. Infer marks from explicit candidate marks or section allocation text such as '(2+3=5)', '(5 x 1 = 5 marks)', and '(2+3+2+3=10)'. field_confidence must be an object keyed by canonical field names like question_text, question_type, marks, answer_text, topic, difficulty, options, and diagram_asset; do not use schema/meta field names like validation_errors or overall_confidence as confidence keys. Include chapter, topic, subtopic, validation_errors, source_evidence, answer_source_type, answer_source_backed, and whether diagrams are required. If a diagram/image is needed, set requires_diagram=true and diagram_asset to the exact image asset metadata from the prompt. validation_errors must use only the enum codes from the schema; use VALIDATION_FAILED for non-canonical extraction problems. Use answer_source_type=SOURCE_KEY only when an answer or answer key is directly present in the OCR source; otherwise use LLM_GENERATED."
         },
         {
           role: "user",
@@ -481,9 +496,9 @@ export class MistralQuestionExtractor {
       },
       messages: [
         {
-          role: "system",
-          content:
-            "Repair incomplete OCR-grounded questions only when the source evidence supports the repair, then solve. If the question, answer, or diagram is too incomplete or uncertain, keep the uncertainty explicit with validation_errors. Return JSON matching the schema."
+            role: "system",
+            content:
+            "Repair incomplete OCR-grounded questions only when the source evidence supports the repair, then solve. Preserve section_name, question_number, grouping fields, marks, options, and diagram_asset from the candidate unless the evidence clearly improves them. Use answer_source_type=SOURCE_KEY only when an answer or answer key is directly present in the OCR source; otherwise use LLM_GENERATED. If the question, answer, or diagram is too incomplete or uncertain, keep the uncertainty explicit with validation_errors. Return JSON matching the schema."
         },
         {
           role: "user",
@@ -545,40 +560,82 @@ export function parseMistralOcrResult(raw: unknown): OcrResult {
 }
 
 function normalizeExtractionCandidate(candidate: z.infer<typeof extractionCandidateSchema>): ExtractedQuestionCandidate {
-    const invalidConfidence =
-      isOutOfRangeConfidence(candidate.overall_confidence) ||
-      Object.values(candidate.field_confidence).some(isOutOfRangeConfidence);
+  const invalidConfidence =
+    isOutOfRangeConfidence(candidate.overall_confidence) ||
+    Object.values(candidate.field_confidence).some(isOutOfRangeConfidence);
+  const diagramAsset = normalizeDiagramAssetForQuestion(candidate.cleaned_question_text, candidate.diagram_asset);
+  const requiresDiagram = candidate.requires_diagram && (diagramAsset !== undefined || referencesProvidedDiagram(candidate.cleaned_question_text));
 
-    return {
-      questionNumber: candidate.question_number,
-      sectionName: candidate.section_name,
-      pageNumber: candidate.page_number,
-      sourcePageStart: candidate.source_page_start,
-      sourcePageEnd: candidate.source_page_end,
-      rawOcrText: candidate.raw_ocr_text,
-      cleanedQuestionText: candidate.cleaned_question_text,
-      questionType: candidate.question_type,
-      marks: candidate.marks,
-      options: candidate.options,
-      answerText: candidate.answer_text,
-      solutionText: candidate.solution_text,
-      answerSourceType: candidate.answer_source_type,
-      answerSourceBacked: candidate.answer_source_backed,
-      chapter: candidate.chapter,
-      topic: candidate.topic,
-      subtopic: candidate.subtopic,
-      difficulty: candidate.difficulty,
-      bloomLevel: candidate.bloom_level,
-      requiresDiagram: candidate.requires_diagram,
-      diagramAsset: candidate.diagram_asset,
-      fieldConfidence: normalizeFieldConfidence(candidate.field_confidence),
-      overallConfidence: normalizeConfidence(candidate.overall_confidence),
-      validationErrors: normalizeValidationErrors([
-        ...candidate.validation_errors,
-        ...(invalidConfidence ? ["VALIDATION_FAILED"] : [])
-      ]),
-      sourceEvidence: candidate.source_evidence
-    };
+  return {
+    questionNumber: nonEmptyOptional(candidate.question_number),
+    sectionName: nonEmptyOptional(candidate.section_name),
+    pageNumber: candidate.page_number,
+    sourcePageStart: candidate.source_page_start,
+    sourcePageEnd: candidate.source_page_end,
+    rawOcrText: candidate.raw_ocr_text,
+    cleanedQuestionText: candidate.cleaned_question_text,
+    parentQuestionNumber: nonEmptyOptional(candidate.parent_question_number),
+    questionLabel: nonEmptyOptional(candidate.question_label),
+    partLabel: nonEmptyOptional(candidate.part_label),
+    groupKey: nonEmptyOptional(candidate.group_key),
+    stemText: nonEmptyOptional(candidate.stem_text),
+    displayOrder: candidate.display_order,
+    questionType: candidate.question_type,
+    marks: candidate.marks,
+    options: candidate.options,
+    answerText: candidate.answer_text,
+    solutionText: candidate.solution_text,
+    answerSourceType: candidate.answer_source_type,
+    answerSourceBacked: candidate.answer_source_backed,
+    chapter: nonEmptyOptional(candidate.chapter),
+    topic: nonEmptyOptional(candidate.topic),
+    subtopic: nonEmptyOptional(candidate.subtopic),
+    difficulty: nonEmptyOptional(candidate.difficulty),
+    bloomLevel: nonEmptyOptional(candidate.bloom_level),
+    requiresDiagram,
+    diagramAsset,
+    fieldConfidence: normalizeFieldConfidence(candidate.field_confidence),
+    overallConfidence: normalizeConfidence(candidate.overall_confidence),
+    validationErrors: normalizeValidationErrors([
+      ...candidate.validation_errors.filter((reason) => reason !== "DIAGRAM_ASSET_MISSING" || requiresDiagram),
+      ...(invalidConfidence ? ["VALIDATION_FAILED"] : [])
+    ]),
+    sourceEvidence: candidate.source_evidence
+  };
+}
+
+function nonEmptyOptional(value: string | undefined) {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeDiagramAsset(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const assets = value.map(normalizeDiagramAsset).filter((asset) => asset !== undefined);
+    return assets.length > 0 ? assets : undefined;
+  }
+
+  const record = Object.fromEntries(
+    Object.entries(value).filter(([, item]) => item !== null && item !== undefined && item !== "")
+  );
+  return Object.keys(record).length > 0 ? record : undefined;
+}
+
+function normalizeDiagramAssetForQuestion(questionText: string, value: unknown) {
+  const asset = normalizeDiagramAsset(value);
+  if (asset === undefined) {
+    return undefined;
+  }
+  return referencesProvidedDiagram(questionText) ? asset : undefined;
+}
+
+function referencesProvidedDiagram(questionText: string) {
+  return /\b(as shown|shown below|shown above|shown in|given below|given above|given (circuit|figure|diagram|image)|figure shows|diagram shows|image shows|observe (the )?(figure|diagram|image|circuit)|based on (the )?(figure|diagram|image|circuit)|from (the )?(figure|diagram|image|circuit)|in the (figure|diagram|image)|the following (figure|diagram|image)|following (figure|diagram|image)|circuit shown)\b/iu.test(
+    questionText
+  );
 }
 
 export function parseMistralChatCandidateBatchBody(body: unknown) {
@@ -660,9 +717,13 @@ function normalizeMistralPage(page: z.infer<typeof mistralOcrPageSchema>): OcrPa
 function buildExtractionPrompt(pages: OcrPage[]) {
   return pages
     .map((page) => {
+      const imageAssets = page.blocks
+        .filter((block) => block.blockType === "image")
+        .map((block, index) => `- image ${index + 1}: ${JSON.stringify(block.sourceAsset ?? { label: block.text })}`)
+        .join("\n");
       return `Page ${page.pageNumber}\\nOCR confidence: avg=${page.averageConfidence ?? "unknown"} min=${
         page.minimumConfidence ?? "unknown"
-      }\\n\\n${page.markdown}`;
+      }\\nImage assets on this page:\\n${imageAssets || "- none"}\\nAttach diagram_asset only when the question refers to a provided source figure/image/diagram on the paper, such as "as shown", "given below", "observe the figure", or a circuit/figure shown in the paper. Do not attach a source image to questions that ask the student to draw/sketch a diagram when no source diagram is provided.\\n\\n${page.markdown}`;
     })
     .join("\\n\\n---\\n\\n");
 }

@@ -1,4 +1,4 @@
-import { HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 export const maxR2PresignExpiresSeconds = 7 * 24 * 60 * 60;
@@ -28,6 +28,12 @@ export interface StoredObjectHead {
 export interface StoredObjectPut {
   objectKey: string;
   etag?: string | undefined;
+}
+
+export interface StoredObjectRead {
+  objectKey: string;
+  body: Uint8Array;
+  contentType?: string | undefined;
 }
 
 export function loadR2ConfigFromEnv(env: NodeJS.ProcessEnv): R2Config {
@@ -104,7 +110,6 @@ export class R2ObjectStore {
     });
     await this.client.send(command);
 
-    const { GetObjectCommand } = await import("@aws-sdk/client-s3");
     return getSignedUrl(
       this.client,
       new GetObjectCommand({
@@ -147,6 +152,25 @@ export class R2ObjectStore {
     return {
       objectKey: input.objectKey,
       etag: response.ETag
+    };
+  }
+
+  async readObject(objectKey: string): Promise<StoredObjectRead> {
+    const response = await this.client.send(
+      new GetObjectCommand({
+        Bucket: this.config.bucket,
+        Key: objectKey
+      })
+    );
+
+    if (!response.Body) {
+      throw new Error(`R2 object ${objectKey} is missing Body`);
+    }
+
+    return {
+      objectKey,
+      body: await response.Body.transformToByteArray(),
+      contentType: response.ContentType
     };
   }
 }

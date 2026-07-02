@@ -49,6 +49,12 @@ export interface ExtractedQuestionCandidate {
   sourcePageEnd?: number | undefined;
   rawOcrText: string;
   cleanedQuestionText: string;
+  parentQuestionNumber?: string | undefined;
+  questionLabel?: string | undefined;
+  partLabel?: string | undefined;
+  groupKey?: string | undefined;
+  stemText?: string | undefined;
+  displayOrder?: number | undefined;
   questionType: string;
   marks?: number | undefined;
   options?: unknown;

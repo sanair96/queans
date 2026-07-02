@@ -66,7 +66,7 @@ export interface CandidateConfidenceResult {
 export const defaultConfidencePolicy: ConfidencePolicy = {
   requiredFieldThreshold: 0.82,
   optionalFieldThreshold: 0.72,
-  minimumOcrConfidence: 0.7,
+  minimumOcrConfidence: 0.35,
   averageOcrConfidence: 0.86
 };
 

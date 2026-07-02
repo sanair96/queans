@@ -7,6 +7,7 @@ import {
   candidateUpdateForReviewedItem,
   reviewedItemToApplyWhere,
   reviewGateForConfidenceDecision,
+  validationErrorsForConfidence,
   workflowCompletionPayload
 } from "./app.activities.js";
 
@@ -92,6 +93,34 @@ describe("candidateUpdateForReviewedItem", () => {
     });
   });
 
+  it("applies reviewed grouping metadata before approval", () => {
+    expect(
+      candidateUpdateForReviewedItem("EDITED", "EDIT_AND_APPROVE", {
+        candidate: {
+          cleanedQuestionText: "Observe the diagram. What is the current through R1?",
+          questionType: "NUMERICAL",
+          parentQuestionNumber: "4",
+          questionLabel: "Question 4",
+          partLabel: "a",
+          groupKey: "section-e:4",
+          stemText: "Observe the circuit diagram and answer the following.",
+          displayOrder: 14,
+          answerText: "1 A",
+          marks: 2
+        }
+      })
+    ).toMatchObject({
+      parentQuestionNumber: "4",
+      questionLabel: "Question 4",
+      partLabel: "a",
+      groupKey: "section-e:4",
+      stemText: "Observe the circuit diagram and answer the following.",
+      displayOrder: 14,
+      reviewStatus: "EDITED_AND_APPROVED"
+    });
+  });
+
+
   it("applies reviewed diagram asset metadata", () => {
     expect(
       candidateUpdateForReviewedItem("EDITED", "EDIT_AND_APPROVE", {
@@ -126,6 +155,28 @@ describe("reviewedItemToApplyWhere", () => {
       },
       appliedAt: null
     });
+  });
+});
+
+describe("validationErrorsForConfidence", () => {
+  it("drops model diagram-missing reasons when a diagram asset is stored", () => {
+    expect(
+      validationErrorsForConfidence({
+        validationErrors: ["DIAGRAM_ASSET_MISSING", "ANSWER_UNCERTAIN", "LOW_OCR_CONFIDENCE"],
+        requiresDiagram: true,
+        diagramAsset: { objectKey: "ocr-assets/source/page-1/image.jpeg" }
+      })
+    ).toEqual(["ANSWER_UNCERTAIN"]);
+  });
+
+  it("drops diagram-missing reasons when the normalized candidate does not require a source diagram", () => {
+    expect(
+      validationErrorsForConfidence({
+        validationErrors: ["DIAGRAM_ASSET_MISSING", "ANSWER_UNCERTAIN"],
+        requiresDiagram: false,
+        diagramAsset: null
+      })
+    ).toEqual(["ANSWER_UNCERTAIN"]);
   });
 });
 

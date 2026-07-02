@@ -424,44 +424,50 @@ model Subtopic {
 }
 
 model QuestionCandidate {
-  id                  String           @id @default(uuid())
-  sourcePaperId       String           @map("source_paper_id")
-  sourcePaper         SourcePaper      @relation(fields: [sourcePaperId], references: [id], onDelete: Cascade)
-  approvedQuestionId  String?          @unique @map("approved_question_id")
-  approvedQuestion    Question?        @relation("ApprovedCandidateQuestion", fields: [approvedQuestionId], references: [id])
-  fingerprint         String
-  pageNumber          Int?             @map("page_number")
-  sourcePageStart     Int?             @map("source_page_start")
-  sourcePageEnd       Int?             @map("source_page_end")
-  questionNumber      String?          @map("question_number")
-  sectionName         String?          @map("section_name")
-  rawOcrText          String           @map("raw_ocr_text")
-  cleanedQuestionText String           @map("cleaned_question_text")
-  questionType        QuestionType     @default(UNKNOWN) @map("question_type")
-  marks               Float?
-  options             Json?
-  answerText          String?          @map("answer_text")
-  solutionText        String?          @map("solution_text")
-  answerSourceType    AnswerSourceType @default(LLM_GENERATED) @map("answer_source_type")
-  answerSourceBacked  Boolean          @default(false) @map("answer_source_backed")
-  chapterId           String?          @map("chapter_id")
-  chapter             Chapter?         @relation(fields: [chapterId], references: [id])
-  topicId             String?          @map("topic_id")
-  topic               Topic?           @relation(fields: [topicId], references: [id])
-  subtopicId          String?          @map("subtopic_id")
-  subtopic            Subtopic?        @relation(fields: [subtopicId], references: [id])
-  difficulty          String?
-  bloomLevel          String?          @map("bloom_level")
-  requiresDiagram     Boolean          @default(false) @map("requires_diagram")
-  diagramAsset        Json?            @map("diagram_asset")
-  extractedPayload    Json             @map("extracted_payload")
-  sourceEvidence      Json             @map("source_evidence")
-  fieldConfidence     Json             @map("field_confidence")
-  overallConfidence   Float            @map("overall_confidence")
-  validationErrors    Json             @map("validation_errors")
-  reviewStatus        CandidateStatus  @default(EXTRACTED) @map("review_status")
-  createdAt           DateTime         @default(now()) @map("created_at")
-  updatedAt           DateTime         @updatedAt @map("updated_at")
+  id                   String           @id @default(uuid())
+  sourcePaperId        String           @map("source_paper_id")
+  sourcePaper          SourcePaper      @relation(fields: [sourcePaperId], references: [id], onDelete: Cascade)
+  approvedQuestionId   String?          @unique @map("approved_question_id")
+  approvedQuestion     Question?        @relation("ApprovedCandidateQuestion", fields: [approvedQuestionId], references: [id])
+  fingerprint          String
+  pageNumber           Int?             @map("page_number")
+  sourcePageStart      Int?             @map("source_page_start")
+  sourcePageEnd        Int?             @map("source_page_end")
+  questionNumber       String?          @map("question_number")
+  parentQuestionNumber String?          @map("parent_question_number")
+  questionLabel        String?          @map("question_label")
+  partLabel            String?          @map("part_label")
+  groupKey             String?          @map("group_key")
+  stemText             String?          @map("stem_text")
+  displayOrder         Int?             @map("display_order")
+  sectionName          String?          @map("section_name")
+  rawOcrText           String           @map("raw_ocr_text")
+  cleanedQuestionText  String           @map("cleaned_question_text")
+  questionType         QuestionType     @default(UNKNOWN) @map("question_type")
+  marks                Float?
+  options              Json?
+  answerText           String?          @map("answer_text")
+  solutionText         String?          @map("solution_text")
+  answerSourceType     AnswerSourceType @default(LLM_GENERATED) @map("answer_source_type")
+  answerSourceBacked   Boolean          @default(false) @map("answer_source_backed")
+  chapterId            String?          @map("chapter_id")
+  chapter              Chapter?         @relation(fields: [chapterId], references: [id])
+  topicId              String?          @map("topic_id")
+  topic                Topic?           @relation(fields: [topicId], references: [id])
+  subtopicId           String?          @map("subtopic_id")
+  subtopic             Subtopic?        @relation(fields: [subtopicId], references: [id])
+  difficulty           String?
+  bloomLevel           String?          @map("bloom_level")
+  requiresDiagram      Boolean          @default(false) @map("requires_diagram")
+  diagramAsset         Json?            @map("diagram_asset")
+  extractedPayload     Json             @map("extracted_payload")
+  sourceEvidence       Json             @map("source_evidence")
+  fieldConfidence      Json             @map("field_confidence")
+  overallConfidence    Float            @map("overall_confidence")
+  validationErrors     Json             @map("validation_errors")
+  reviewStatus         CandidateStatus  @default(EXTRACTED) @map("review_status")
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
 
   answers          Answer[]
   duplicateMatches DuplicateMatch[]
@@ -555,25 +561,33 @@ model ReviewCorrection {
 }
 
 model Question {
-  id              String             @id @default(uuid())
-  sourceCandidate QuestionCandidate? @relation("ApprovedCandidateQuestion")
-  questionText    String             @map("question_text")
-  questionType    QuestionType       @map("question_type")
-  marks           Float?
-  options         Json?
-  chapterId       String?            @map("chapter_id")
-  chapter         Chapter?           @relation(fields: [chapterId], references: [id])
-  topicId         String?            @map("topic_id")
-  topic           Topic?             @relation(fields: [topicId], references: [id])
-  subtopicId      String?            @map("subtopic_id")
-  subtopic        Subtopic?          @relation(fields: [subtopicId], references: [id])
-  difficulty      String?
-  bloomLevel      String?            @map("bloom_level")
-  status          QuestionStatus     @default(APPROVED)
-  sourceEvidence  Json               @map("source_evidence")
-  createdAt       DateTime           @default(now()) @map("created_at")
-  updatedAt       DateTime           @updatedAt @map("updated_at")
-  archivedAt      DateTime?          @map("archived_at")
+  id                   String             @id @default(uuid())
+  sourceCandidate      QuestionCandidate? @relation("ApprovedCandidateQuestion")
+  questionText         String             @map("question_text")
+  questionType         QuestionType       @map("question_type")
+  marks                Float?
+  options              Json?
+  parentQuestionNumber String?            @map("parent_question_number")
+  questionLabel        String?            @map("question_label")
+  partLabel            String?            @map("part_label")
+  groupKey             String?            @map("group_key")
+  stemText             String?            @map("stem_text")
+  displayOrder         Int?               @map("display_order")
+  chapterId            String?            @map("chapter_id")
+  chapter              Chapter?           @relation(fields: [chapterId], references: [id])
+  topicId              String?            @map("topic_id")
+  topic                Topic?             @relation(fields: [topicId], references: [id])
+  subtopicId           String?            @map("subtopic_id")
+  subtopic             Subtopic?          @relation(fields: [subtopicId], references: [id])
+  difficulty           String?
+  bloomLevel           String?            @map("bloom_level")
+  requiresDiagram      Boolean            @default(false) @map("requires_diagram")
+  diagramAsset         Json?              @map("diagram_asset")
+  status               QuestionStatus     @default(APPROVED)
+  sourceEvidence       Json               @map("source_evidence")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+  archivedAt           DateTime?          @map("archived_at")
 
   answers             Answer[]
   duplicateMatches    DuplicateMatch[]

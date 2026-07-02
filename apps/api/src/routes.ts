@@ -11,7 +11,7 @@ import {
   uploadInitSchema
 } from "@queans/core";
 import { Prisma, prisma, ProviderBatchJobStatus, ReviewStatus, WorkflowStatus } from "@queans/db";
-import { loadR2ConfigFromEnv, R2ObjectStore, type StoredObjectHead } from "@queans/providers";
+import { loadR2ConfigFromEnv, maxR2PresignExpiresSeconds, R2ObjectStore, type StoredObjectHead } from "@queans/providers";
 
 import type { ReviewPatchInput, ReviewReasonCode, UploadCompleteInput } from "@queans/core";
 import type { ApiConfig } from "./config.js";
@@ -575,20 +575,30 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
     return { ok: true };
   });
 
-  app.get("/api/questions", async () => {
+  app.get("/api/questions", async (_request, reply) => {
     const questions = await prisma.question.findMany({
       where: { status: "APPROVED" },
       include: {
         answers: true,
         chapter: true,
         topic: true,
-        subtopic: true
+        subtopic: true,
+        sourceCandidate: {
+          include: {
+            sourcePaper: true
+          }
+        }
       },
       orderBy: { createdAt: "desc" },
       take: 100
     });
+    const hasDiagramAssets = questions.some((question) => diagramAssetNeedsSigning(question.diagramAsset));
+    const r2 = hasDiagramAssets ? getR2ObjectStoreOrReply(reply) : undefined;
+    if (hasDiagramAssets && !r2) {
+      return reply;
+    }
 
-    return { questions };
+    return { questions: await Promise.all(questions.map((question) => questionResponsePayload(question, r2))) };
   });
 
   app.post("/api/internal/dispatch-workflows", async (request, reply) => {
@@ -611,6 +621,67 @@ function getR2ObjectStoreOrReply(reply: FastifyReply) {
     });
     return undefined;
   }
+}
+
+type QuestionWithRelations = Prisma.QuestionGetPayload<{
+  include: {
+    answers: true;
+    chapter: true;
+    topic: true;
+    subtopic: true;
+    sourceCandidate: {
+      include: {
+        sourcePaper: true;
+      };
+    };
+  };
+}>;
+
+async function questionResponsePayload(question: QuestionWithRelations, r2: R2ObjectStore | undefined) {
+  return {
+    ...question,
+    diagramAsset: await signDiagramAsset(question.diagramAsset, r2),
+    sourcePaper: question.sourceCandidate?.sourcePaper
+      ? {
+          id: question.sourceCandidate.sourcePaper.id,
+          sourceFileName: question.sourceCandidate.sourcePaper.sourceFileName,
+          title: question.sourceCandidate.sourcePaper.title
+        }
+      : null
+  };
+}
+
+function diagramAssetNeedsSigning(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(diagramAssetNeedsSigning);
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return typeof record.objectKey === "string" || Object.values(record).some(diagramAssetNeedsSigning);
+}
+
+async function signDiagramAsset(value: unknown, r2: R2ObjectStore | undefined): Promise<unknown> {
+  if (Array.isArray(value)) {
+    return Promise.all(value.map((item) => signDiagramAsset(item, r2)));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const entries = await Promise.all(
+    Object.entries(value).map(async ([key, item]) => [key, await signDiagramAsset(item, r2)] as const)
+  );
+  const signed = Object.fromEntries(entries);
+  if (typeof signed.objectKey === "string" && r2) {
+    return {
+      ...signed,
+      url: await r2.createPresignedRead(signed.objectKey, maxR2PresignExpiresSeconds)
+    };
+  }
+  return signed;
 }
 
 function buildSourcePaperObjectKey(fileName: string) {

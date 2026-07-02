@@ -72,6 +72,90 @@ describe("parseMistralExtractionContent", () => {
     });
   });
 
+  it("preserves subquestion grouping metadata", () => {
+    const [candidate] = parseMistralExtractionContent(
+      JSON.stringify({
+        candidates: [
+          {
+            ...baseCandidate,
+            question_number: "2.a",
+            parent_question_number: "2",
+            question_label: "Question 2",
+            part_label: "a",
+            group_key: "section-c:2",
+            stem_text: "Observe the circuit diagram and answer the following.",
+            display_order: 7
+          }
+        ]
+      })
+    );
+
+    expect(candidate).toMatchObject({
+      questionNumber: "2.a",
+      parentQuestionNumber: "2",
+      questionLabel: "Question 2",
+      partLabel: "a",
+      groupKey: "section-c:2",
+      stemText: "Observe the circuit diagram and answer the following.",
+      displayOrder: 7
+    });
+  });
+
+  it("preserves diagram asset references", () => {
+    const [candidate] = parseMistralExtractionContent(
+      JSON.stringify({
+        candidates: [
+          {
+            ...baseCandidate,
+            cleaned_question_text: "Three resistors are connected as shown in the figure. Find the current.",
+            requires_diagram: true,
+            diagram_asset: {
+              imageId: "img-1",
+              objectKey: "ocr-assets/source/page-1/img-1.png",
+              label: "page 1 img-1.png"
+            }
+          }
+        ]
+      })
+    );
+
+    expect(candidate).toMatchObject({
+      requiresDiagram: true,
+      diagramAsset: {
+        imageId: "img-1",
+        objectKey: "ocr-assets/source/page-1/img-1.png",
+        label: "page 1 img-1.png"
+      }
+    });
+  });
+
+  it("does not attach a source image to draw-your-own diagram questions", () => {
+    const [candidate] = parseMistralExtractionContent(
+      JSON.stringify({
+        candidates: [
+          {
+            ...baseCandidate,
+            cleaned_question_text:
+              "Draw the path of a light ray passing through a prism. Label the angle of incidence and angle of deviation in the ray diagram.",
+            requires_diagram: true,
+            diagram_asset: {
+              imageId: "img-0.jpeg",
+              objectKey: "ocr-assets/source/page-3/circuit.jpeg",
+              label: "page 3 img-0.jpeg"
+            },
+            validation_errors: ["DIAGRAM_ASSET_MISSING"]
+          }
+        ]
+      })
+    );
+
+    expect(candidate).toMatchObject({
+      requiresDiagram: false,
+      diagramAsset: undefined,
+      validationErrors: []
+    });
+  });
+
   it("maps unknown validation warnings to a review-blocking validation failure", () => {
     const [candidate] = parseMistralExtractionContent(
       JSON.stringify({
@@ -174,7 +258,16 @@ describe("MistralQuestionExtractor", () => {
           pageNumber: 1,
           markdown: "1. What is photosynthesis?",
           rawJson: {},
-          blocks: [],
+          blocks: [
+            {
+              blockType: "image",
+              text: "img-1.png",
+              sourceAsset: {
+                imageId: "img-1",
+                objectKey: "ocr-assets/source/page-1/img-1.png"
+              }
+            }
+          ],
           images: []
         }
       ]);
@@ -216,11 +309,22 @@ describe("MistralQuestionExtractor", () => {
     const validationErrors = asRecord(candidateProperties.validation_errors);
     const validationItems = asRecord(validationErrors.items);
     expect(validationItems.enum).toEqual(expect.arrayContaining(["VALIDATION_FAILED", "LOW_TOPIC_CONFIDENCE"]));
+    expect(candidateProperties).toMatchObject({
+      parent_question_number: { type: "string" },
+      question_label: { type: "string" },
+      part_label: { type: "string" },
+      group_key: { type: "string" },
+      stem_text: { type: "string" },
+      display_order: { type: "integer" }
+    });
+    const messages = request.messages as Array<{ role: string; content: string }>;
+    expect(messages[1]?.content).toContain("Image assets on this page:");
+    expect(messages[1]?.content).toContain("ocr-assets/source/page-1/img-1.png");
   });
 });
 
 describe("MistralBatchProvider", () => {
-  it("builds OCR batch lines without synchronous-only OCR options", () => {
+  it("builds OCR batch lines with image and confidence extraction enabled", () => {
     const provider = new MistralBatchProvider(testMistralConfig);
 
     expect(
@@ -231,6 +335,9 @@ describe("MistralBatchProvider", () => {
     ).toEqual({
       custom_id: "sourcePaper:source-1",
       body: {
+        confidence_scores_granularity: "word",
+        table_format: "markdown",
+        include_image_base64: true,
         document: {
           type: "document_url",
           document_url: "https://r2.example/source.pdf"
