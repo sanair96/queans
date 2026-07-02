@@ -80,6 +80,27 @@ const extractionResponseSchema = z.object({
   candidates: z.array(extractionCandidateSchema)
 });
 
+const extractionValidationReasonCodes = [
+  "LOW_OCR_CONFIDENCE",
+  "MISSING_REQUIRED_FIELD",
+  "LOW_FIELD_CONFIDENCE",
+  "VALIDATION_FAILED",
+  "DUPLICATE_CONFLICT",
+  "ANSWER_UNCERTAIN",
+  "MATH_OR_DIAGRAM_UNCERTAIN",
+  "TOPIC_AMBIGUOUS",
+  "CONTRADICTION_DETECTED",
+  "MISSING_QUESTION_TEXT",
+  "MISSING_MARKS",
+  "MCQ_OPTIONS_MISSING",
+  "MCQ_CORRECT_ANSWER_MISSING",
+  "TOPIC_NOT_MAPPED",
+  "LOW_ANSWER_CONFIDENCE",
+  "DIAGRAM_ASSET_MISSING",
+  "LLM_GENERATED_ANSWER_UNVERIFIED",
+  "LOW_TOPIC_CONFIDENCE"
+] as const;
+
 const extractionResponseJsonSchema = {
   title: "QuestionCandidates",
   type: "object",
@@ -133,7 +154,7 @@ const extractionResponseJsonSchema = {
           overall_confidence: { type: "number" },
           validation_errors: {
             type: "array",
-            items: { type: "string" }
+            items: { type: "string", enum: [...extractionValidationReasonCodes] }
           },
           source_evidence: {}
         }
@@ -206,7 +227,7 @@ export class MistralQuestionExtractor {
         {
           role: "system",
           content:
-            "Extract question candidates from OCR markdown. Return only JSON matching the provided schema. Use the exact snake_case field names from the schema. field_confidence must be an object keyed by field name with numeric confidence values, not a single number. Include chapter, topic, subtopic, validation_errors, source_evidence, answer_source_type, answer_source_backed, and whether diagrams are required. Use answer_source_type=SOURCE_KEY only when the answer is directly present in the OCR source; otherwise use LLM_GENERATED and do not hide uncertainty."
+            "Extract question candidates from OCR markdown. Return only JSON matching the provided schema. Use the exact snake_case field names from the schema. field_confidence must be an object keyed by field name with numeric confidence values, not a single number. Include chapter, topic, subtopic, validation_errors, source_evidence, answer_source_type, answer_source_backed, and whether diagrams are required. validation_errors must use only the enum codes from the schema; use VALIDATION_FAILED for non-canonical extraction problems. Use answer_source_type=SOURCE_KEY only when the answer is directly present in the OCR source; otherwise use LLM_GENERATED and do not hide uncertainty."
         },
         {
           role: "user",
@@ -259,7 +280,7 @@ export function parseMistralExtractionContent(content: string): ExtractedQuestio
     diagramAsset: candidate.diagram_asset,
     fieldConfidence: candidate.field_confidence,
     overallConfidence: candidate.overall_confidence,
-    validationErrors: candidate.validation_errors.filter(isKnownReviewReason),
+    validationErrors: normalizeValidationErrors(candidate.validation_errors),
     sourceEvidence: candidate.source_evidence
   }));
 }
@@ -333,25 +354,10 @@ function requiredEnv(env: NodeJS.ProcessEnv, key: string) {
   return value;
 }
 
-function isKnownReviewReason(reason: string): reason is QuestionExtractionResult["candidates"][number]["validationErrors"][number] {
-  return [
-    "LOW_OCR_CONFIDENCE",
-    "MISSING_REQUIRED_FIELD",
-    "LOW_FIELD_CONFIDENCE",
-    "VALIDATION_FAILED",
-    "DUPLICATE_CONFLICT",
-    "ANSWER_UNCERTAIN",
-    "MATH_OR_DIAGRAM_UNCERTAIN",
-    "TOPIC_AMBIGUOUS",
-    "CONTRADICTION_DETECTED",
-    "MISSING_QUESTION_TEXT",
-    "MISSING_MARKS",
-    "MCQ_OPTIONS_MISSING",
-    "MCQ_CORRECT_ANSWER_MISSING",
-    "TOPIC_NOT_MAPPED",
-    "LOW_ANSWER_CONFIDENCE",
-    "DIAGRAM_ASSET_MISSING",
-    "LLM_GENERATED_ANSWER_UNVERIFIED",
-    "LOW_TOPIC_CONFIDENCE"
-  ].includes(reason);
+function normalizeValidationErrors(reasons: string[]) {
+  return [...new Set(reasons.map((reason) => (isKnownReviewReason(reason) ? reason : "VALIDATION_FAILED")))];
+}
+
+function isKnownReviewReason(reason: string): reason is (typeof extractionValidationReasonCodes)[number] {
+  return extractionValidationReasonCodes.some((knownReason) => knownReason === reason);
 }

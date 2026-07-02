@@ -72,6 +72,21 @@ describe("parseMistralExtractionContent", () => {
     });
   });
 
+  it("maps unknown validation warnings to a review-blocking validation failure", () => {
+    const [candidate] = parseMistralExtractionContent(
+      JSON.stringify({
+        candidates: [
+          {
+            ...baseCandidate,
+            validation_errors: ["answer looks guessed", "LOW_TOPIC_CONFIDENCE", "answer looks guessed"]
+          }
+        ]
+      })
+    );
+
+    expect(candidate?.validationErrors).toEqual(["VALIDATION_FAILED", "LOW_TOPIC_CONFIDENCE"]);
+  });
+
   it("fails malformed extraction responses with a readable parser error", () => {
     expect(() =>
       parseMistralExtractionContent(
@@ -152,5 +167,25 @@ describe("MistralQuestionExtractor", () => {
         }
       }
     });
+
+    const request = asRecord(fetchCalls[0]);
+    const responseFormat = asRecord(request.response_format);
+    const jsonSchema = asRecord(responseFormat.json_schema);
+    const schema = asRecord(jsonSchema.schema);
+    const schemaProperties = asRecord(schema.properties);
+    const candidates = asRecord(schemaProperties.candidates);
+    const candidateItems = asRecord(candidates.items);
+    const candidateProperties = asRecord(candidateItems.properties);
+    const validationErrors = asRecord(candidateProperties.validation_errors);
+    const validationItems = asRecord(validationErrors.items);
+    expect(validationItems.enum).toEqual(expect.arrayContaining(["VALIDATION_FAILED", "LOW_TOPIC_CONFIDENCE"]));
   });
 });
+
+function asRecord(value: unknown) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected object record.");
+  }
+
+  return value as Record<string, unknown>;
+}
