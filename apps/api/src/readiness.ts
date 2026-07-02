@@ -50,6 +50,20 @@ export async function checkReadiness(
 
 export async function checkDatabaseReady() {
   await prisma.$queryRaw`SELECT 1`;
+  const schemaObjects = await prisma.$queryRaw<{ table_name: string; column_name: string }[]>`
+    SELECT table_name, column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND (
+        (table_name = 'workflow_runs' AND column_name = 'retry_of_workflow_run_id')
+        OR (table_name = 'provider_batch_jobs' AND column_name = 'id')
+      )
+  `;
+  const availableSchemaObjects = new Set(schemaObjects.map((schemaObject) => `${schemaObject.table_name}.${schemaObject.column_name}`));
+  const missingSchemaObjects = requiredDatabaseSchemaObjects.filter((schemaObject) => !availableSchemaObjects.has(schemaObject));
+  if (missingSchemaObjects.length > 0) {
+    throw new Error(`Database schema is not migrated. Missing: ${missingSchemaObjects.join(", ")}. Run pnpm db:deploy.`);
+  }
 }
 
 export async function checkTemporalReady(config: ApiConfig) {
@@ -93,3 +107,5 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
     }
   }
 }
+
+const requiredDatabaseSchemaObjects = ["workflow_runs.retry_of_workflow_run_id", "provider_batch_jobs.id"] as const;

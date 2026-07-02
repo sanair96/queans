@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { checkMistralConfigReady, checkReadiness } from "./readiness.js";
+const mocks = vi.hoisted(() => ({
+  queryRaw: vi.fn()
+}));
+
+vi.mock("@queans/db", () => ({
+  prisma: {
+    $queryRaw: mocks.queryRaw
+  }
+}));
+
+import { checkDatabaseReady, checkMistralConfigReady, checkReadiness } from "./readiness.js";
 import type { ApiConfig } from "./config.js";
 
 const apiConfig: ApiConfig = {
@@ -17,6 +27,7 @@ const apiConfig: ApiConfig = {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  mocks.queryRaw.mockReset();
 });
 
 describe("checkReadiness", () => {
@@ -65,6 +76,29 @@ describe("checkReadiness", () => {
         }
       }
     });
+  });
+});
+
+describe("checkDatabaseReady", () => {
+  it("accepts the migrated schema required by upload completion", async () => {
+    mocks.queryRaw
+      .mockResolvedValueOnce([{ connected: 1 }])
+      .mockResolvedValueOnce([
+        { table_name: "provider_batch_jobs", column_name: "id" },
+        { table_name: "workflow_runs", column_name: "retry_of_workflow_run_id" }
+      ]);
+
+    await expect(checkDatabaseReady()).resolves.toBeUndefined();
+  });
+
+  it("reports the exact missing migration object before uploads can fail", async () => {
+    mocks.queryRaw
+      .mockResolvedValueOnce([{ connected: 1 }])
+      .mockResolvedValueOnce([{ table_name: "provider_batch_jobs", column_name: "id" }]);
+
+    await expect(checkDatabaseReady()).rejects.toThrow(
+      "Database schema is not migrated. Missing: workflow_runs.retry_of_workflow_run_id. Run pnpm db:deploy."
+    );
   });
 });
 
