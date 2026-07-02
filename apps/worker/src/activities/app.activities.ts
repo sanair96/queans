@@ -322,6 +322,7 @@ export async function createReviewItemsForCandidates(input: PaperIngestionWorkfl
 
     const existingReviewItem = await prisma.reviewItem.findFirst({
       where: {
+        workflowRunId: input.ingestionRunId,
         candidateId: candidate.id,
         status: { in: ["OPEN", "ASSIGNED", "APPROVED", "EDITED", "REJECTED", "SKIPPED"] }
       }
@@ -329,6 +330,7 @@ export async function createReviewItemsForCandidates(input: PaperIngestionWorkfl
     if (!existingReviewItem) {
       await prisma.reviewItem.create({
         data: {
+          workflowRunId: input.ingestionRunId,
           candidateId: candidate.id,
           sourcePaperId: candidate.sourcePaperId,
           reviewType: reviewTypeForReasons(result.reviewReasons),
@@ -381,7 +383,7 @@ export function reviewGateForConfidenceDecision(decision: CandidateDecision) {
 export async function hasOpenReviewItems(input: PaperIngestionWorkflowInput) {
   const count = await prisma.reviewItem.count({
     where: {
-      sourcePaperId: input.sourcePaperId,
+      workflowRunId: input.ingestionRunId,
       status: { in: ["OPEN", "ASSIGNED"] }
     }
   });
@@ -413,7 +415,7 @@ export async function markWaitingForReview(input: PaperIngestionWorkflowInput) {
 
 export async function applyReviewedItems(input: PaperIngestionWorkflowInput) {
   const reviewedItems = await prisma.reviewItem.findMany({
-    where: reviewedItemToApplyWhere(input.sourcePaperId)
+    where: reviewedItemToApplyWhere(input)
   });
 
   for (const item of reviewedItems) {
@@ -434,16 +436,16 @@ export async function applyReviewedItems(input: PaperIngestionWorkflowInput) {
 
 export async function hasReviewedItemsToApply(input: PaperIngestionWorkflowInput) {
   const count = await prisma.reviewItem.count({
-    where: reviewedItemToApplyWhere(input.sourcePaperId)
+    where: reviewedItemToApplyWhere(input)
   });
   return count > 0;
 }
 
 const reviewedItemApplyStatuses = [ReviewStatus.APPROVED, ReviewStatus.EDITED, ReviewStatus.REJECTED, ReviewStatus.SKIPPED] as const;
 
-export function reviewedItemToApplyWhere(sourcePaperId: string) {
+export function reviewedItemToApplyWhere(input: PaperIngestionWorkflowInput) {
   return {
-    sourcePaperId,
+    workflowRunId: input.ingestionRunId,
     status: { in: [...reviewedItemApplyStatuses] },
     appliedAt: null
   } satisfies Prisma.ReviewItemWhereInput;

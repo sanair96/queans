@@ -5,11 +5,14 @@ import { Prisma, ReviewStatus } from "@queans/db";
 import {
   canPatchReviewItem,
   ingestionFailureSummary,
+  ingestionRunCounts,
   ingestionQueuedPayload,
   isActiveIngestionStatus,
   isPrismaUniqueConstraintError,
   mutableReviewItemWhere,
+  openReviewItemsWhere,
   reviewItemAlreadyClosedPayload,
+  reviewSignalRunForItem,
   uploadCompletionConflict,
   uploadCompletionPayload
 } from "./routes.js";
@@ -177,6 +180,25 @@ describe("ingestionQueuedPayload", () => {
   });
 });
 
+describe("ingestionRunCounts", () => {
+  it("uses run-scoped review counts with source-paper OCR and candidate counts", () => {
+    expect(
+      ingestionRunCounts(
+        {
+          questionCandidates: 12,
+          reviewItems: 7,
+          ocrPages: 4
+        },
+        2
+      )
+    ).toEqual({
+      questionCandidates: 12,
+      reviewItems: 2,
+      ocrPages: 4
+    });
+  });
+});
+
 describe("ingestionFailureSummary", () => {
   it("summarizes extraction schema failures and attaches matching provider cost metadata", () => {
     expect(
@@ -268,6 +290,45 @@ describe("mutableReviewItemWhere", () => {
       status: { in: [ReviewStatus.OPEN, ReviewStatus.ASSIGNED] },
       appliedAt: null
     });
+  });
+});
+
+describe("openReviewItemsWhere", () => {
+  it("shows only open work attached to active paper-ingestion runs", () => {
+    expect(openReviewItemsWhere()).toEqual({
+      status: { in: [ReviewStatus.OPEN, ReviewStatus.ASSIGNED] },
+      workflowRun: {
+        workflowType: "PAPER_INGESTION",
+        status: { in: ["PENDING", "RUNNING", "WAITING_FOR_REVIEW"] }
+      }
+    });
+  });
+});
+
+describe("reviewSignalRunForItem", () => {
+  it("returns the review item's active ingestion run for wakeups", () => {
+    expect(
+      reviewSignalRunForItem({
+        workflowRun: {
+          id: "run-1",
+          status: "WAITING_FOR_REVIEW"
+        }
+      })
+    ).toEqual({
+      id: "run-1",
+      status: "WAITING_FOR_REVIEW"
+    });
+  });
+
+  it("does not signal terminal ingestion runs", () => {
+    expect(
+      reviewSignalRunForItem({
+        workflowRun: {
+          id: "run-1",
+          status: "COMPLETED"
+        }
+      })
+    ).toBeUndefined();
   });
 });
 

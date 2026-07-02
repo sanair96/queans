@@ -91,8 +91,8 @@ describe("candidateUpdateForReviewedItem", () => {
 
 describe("reviewedItemToApplyWhere", () => {
   it("selects only terminal, unapplied review items for workflow application", () => {
-    expect(reviewedItemToApplyWhere("source-paper-1")).toEqual({
-      sourcePaperId: "source-paper-1",
+    expect(reviewedItemToApplyWhere({ ingestionRunId: "run-1", sourcePaperId: "source-paper-1" })).toEqual({
+      workflowRunId: "run-1",
       status: {
         in: [ReviewStatus.APPROVED, ReviewStatus.EDITED, ReviewStatus.REJECTED, ReviewStatus.SKIPPED]
       },

@@ -228,6 +228,11 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
     const workflowRun = await prisma.workflowRun.findUnique({
       where: { id: request.params.id },
       include: {
+        _count: {
+          select: {
+            reviewItems: true
+          }
+        },
         steps: { orderBy: { startedAt: "asc" } },
         events: { orderBy: { createdAt: "asc" }, take: 50 },
         providerRunCosts: { orderBy: { createdAt: "asc" } },
@@ -261,7 +266,9 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
         currentStep: workflowRun.currentStep,
         providerRunCosts: workflowRun.providerRunCosts
       }),
-      counts: workflowRun.sourcePaper?._count,
+      counts: workflowRun.sourcePaper
+        ? ingestionRunCounts(workflowRun.sourcePaper._count, workflowRun._count.reviewItems)
+        : undefined,
       steps: workflowRun.steps,
       events: workflowRun.events,
       costs: workflowRun.providerRunCosts
@@ -270,7 +277,7 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
 
   app.get("/api/review/tasks", async () => {
     const reviewItems = await prisma.reviewItem.findMany({
-      where: { status: { in: ["OPEN", "ASSIGNED"] } },
+      where: openReviewItemsWhere(),
       include: {
         candidate: true,
         sourcePaper: true
@@ -287,12 +294,10 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
     const reviewItem = await prisma.reviewItem.findUnique({
       where: { id: request.params.id },
       include: {
-        sourcePaper: {
-          include: {
-            workflowRuns: {
-              orderBy: { createdAt: "desc" },
-              take: 1
-            }
+        workflowRun: {
+          select: {
+            id: true,
+            status: true
           }
         }
       }
@@ -349,11 +354,11 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
       return reply.code(409).send(reviewItemAlreadyClosedPayload(latestReviewItem ?? reviewItem));
     }
 
-    const latestRun = reviewItem.sourcePaper.workflowRuns[0];
-    if (latestRun) {
+    const activeRun = reviewSignalRunForItem(reviewItem);
+    if (activeRun) {
       const signalInput = input.reviewedBy
-        ? { ingestionRunId: latestRun.id, reviewedBy: input.reviewedBy }
-        : { ingestionRunId: latestRun.id };
+        ? { ingestionRunId: activeRun.id, reviewedBy: input.reviewedBy }
+        : { ingestionRunId: activeRun.id };
       signalHumanReviewCompleted(config, {
         ...signalInput
       }).catch((error: unknown) => {
@@ -491,6 +496,20 @@ export function ingestionQueuedPayload(workflowRun: { id: string; status: string
   };
 }
 
+export function ingestionRunCounts(
+  sourcePaperCounts: {
+    questionCandidates: number;
+    reviewItems: number;
+    ocrPages: number;
+  },
+  runReviewItems: number
+) {
+  return {
+    ...sourcePaperCounts,
+    reviewItems: runReviewItems
+  };
+}
+
 export function ingestionFailureSummary(input: {
   errorPayload: unknown;
   currentStep?: string | null;
@@ -553,6 +572,16 @@ interface ReviewItemMutationState {
 
 const mutableReviewStatuses = [ReviewStatus.OPEN, ReviewStatus.ASSIGNED] as const;
 
+export function openReviewItemsWhere() {
+  return {
+    status: { in: [...mutableReviewStatuses] },
+    workflowRun: {
+      workflowType: "PAPER_INGESTION",
+      status: { in: activeIngestionStatuses() }
+    }
+  } satisfies Prisma.ReviewItemWhereInput;
+}
+
 export function canPatchReviewItem(reviewItem: ReviewItemMutationState) {
   return reviewItem.appliedAt === null && mutableReviewStatuses.some((status) => status === reviewItem.status);
 }
@@ -563,6 +592,10 @@ export function mutableReviewItemWhere(id: string) {
     status: { in: [...mutableReviewStatuses] },
     appliedAt: null
   } satisfies Prisma.ReviewItemWhereInput;
+}
+
+export function reviewSignalRunForItem(reviewItem: { workflowRun: { id: string; status: string } }) {
+  return isActiveIngestionStatus(reviewItem.workflowRun.status) ? reviewItem.workflowRun : undefined;
 }
 
 export function reviewItemAlreadyClosedPayload(reviewItem: ReviewItemMutationState) {

@@ -232,6 +232,7 @@ model WorkflowRun {
   steps            WorkflowStep[]
   events           WorkflowEvent[]
   reviewTasks      ReviewTask[]
+  reviewItems      ReviewItem[]
   providerRunCosts ProviderRunCost[]
   startOutbox      WorkflowStartOutbox?
 
@@ -453,6 +454,8 @@ model ReviewTask {
 
 model ReviewItem {
   id            String            @id @default(uuid())
+  workflowRunId String            @map("workflow_run_id")
+  workflowRun   WorkflowRun       @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
   candidateId   String            @map("candidate_id")
   candidate     QuestionCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
   sourcePaperId String            @map("source_paper_id")
@@ -472,6 +475,7 @@ model ReviewItem {
 
   corrections ReviewCorrection[]
 
+  @@index([workflowRunId, status])
   @@index([sourcePaperId, status])
   @@index([candidateId, status])
   @@index([sourcePaperId, appliedAt])
