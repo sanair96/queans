@@ -96,35 +96,57 @@ export async function recordStepSucceeded(
   outputPayload: unknown
 ) {
   const latestStep = await prisma.workflowStep.findFirst({
-    where: {
-      workflowRunId: input.ingestionRunId,
-      stepName,
-      status: "RUNNING"
-    },
-    orderBy: { startedAt: "desc" }
+    where: completableWorkflowStepWhere(input, stepName),
+    orderBy: [{ startedAt: "desc" }, { completedAt: "desc" }]
   });
 
   if (!latestStep) {
     throw new Error(`No running workflow step found for ${stepName}`);
   }
 
+  if (latestStep.status === "SUCCEEDED") {
+    return { stepId: latestStep.id, reused: true };
+  }
+
   await prisma.$transaction([
     prisma.workflowStep.update({
       where: { id: latestStep.id },
-      data: {
-        status: "SUCCEEDED",
-        completedAt: new Date(),
-        outputPayload: toInputJson(outputPayload)
-      }
+      data: workflowStepSucceededUpdate(outputPayload)
     }),
     prisma.workflowEvent.create({
-      data: {
-        workflowRunId: input.ingestionRunId,
-        eventType: `${stepName.toUpperCase()}_COMPLETED`,
-        eventPayload: toInputJson(outputPayload)
-      }
+      data: workflowStepCompletedEventCreateData(input, stepName, outputPayload)
     })
   ]);
+
+  return { stepId: latestStep.id, reused: false };
+}
+
+export function completableWorkflowStepWhere(input: PaperIngestionWorkflowInput, stepName: PaperIngestionStep) {
+  return {
+    workflowRunId: input.ingestionRunId,
+    stepName,
+    status: { in: ["RUNNING", "SUCCEEDED"] }
+  } satisfies Prisma.WorkflowStepWhereInput;
+}
+
+export function workflowStepSucceededUpdate(outputPayload: unknown, completedAt = new Date()) {
+  return {
+    status: "SUCCEEDED",
+    completedAt,
+    outputPayload: toInputJson(outputPayload)
+  } satisfies Prisma.WorkflowStepUpdateInput;
+}
+
+export function workflowStepCompletedEventCreateData(
+  input: PaperIngestionWorkflowInput,
+  stepName: PaperIngestionStep,
+  outputPayload: unknown
+) {
+  return {
+    workflowRunId: input.ingestionRunId,
+    eventType: `${stepName.toUpperCase()}_COMPLETED`,
+    eventPayload: toInputJson(outputPayload)
+  } satisfies Prisma.WorkflowEventUncheckedCreateInput;
 }
 
 export async function detectDuplicateCandidates(input: PaperIngestionWorkflowInput) {
