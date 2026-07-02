@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Ban, Check, CopyCheck, Save, X } from "lucide-react";
+import { Ban, Check, CircleHelp, CopyCheck, Save, X } from "lucide-react";
 
 import { assertOk } from "../api-errors";
 
@@ -52,7 +52,13 @@ interface ReviewDraft {
   reviewNotes: string;
 }
 
-type ReviewDecision = "APPROVE" | "EDIT_AND_APPROVE" | "REJECT" | "MARK_DUPLICATE" | "MARK_UNPROCESSABLE";
+type ReviewDecision =
+  | "APPROVE"
+  | "EDIT_AND_APPROVE"
+  | "REJECT"
+  | "MARK_DUPLICATE"
+  | "NEEDS_MORE_INFO"
+  | "MARK_UNPROCESSABLE";
 
 const questionTypeOptions = [
   { value: "MCQ", label: "MCQ" },
@@ -174,6 +180,16 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
             >
               <X size={17} aria-hidden="true" />
               Reject
+            </button>
+            <button
+              className="btn secondary"
+              type="button"
+              title="Needs more info"
+              disabled={busyDecision !== null}
+              onClick={() => void submitDecision("NEEDS_MORE_INFO")}
+            >
+              <CircleHelp size={17} aria-hidden="true" />
+              Needs info
             </button>
             <button
               className="btn secondary"
