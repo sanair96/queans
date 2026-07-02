@@ -39,6 +39,7 @@ export async function extractQuestionsAndPersist(input: PaperIngestionWorkflowIn
   let candidatesCreated = 0;
   let candidatesUpdated = 0;
   let committedCandidatesSkipped = 0;
+  let terminalCandidatesSkipped = 0;
 
   await prisma.$transaction(async (tx) => {
     for (const candidate of extraction.candidates) {
@@ -89,12 +90,17 @@ export async function extractQuestionsAndPersist(input: PaperIngestionWorkflowIn
         },
         select: {
           id: true,
-          approvedQuestionId: true
+          approvedQuestionId: true,
+          reviewStatus: true
         }
       });
 
-      if (existingCandidate?.approvedQuestionId) {
-        committedCandidatesSkipped += 1;
+      if (existingCandidate && shouldSkipExistingCandidateForExtraction(existingCandidate)) {
+        if (existingCandidate.approvedQuestionId) {
+          committedCandidatesSkipped += 1;
+        } else {
+          terminalCandidatesSkipped += 1;
+        }
         continue;
       }
 
@@ -154,8 +160,27 @@ export async function extractQuestionsAndPersist(input: PaperIngestionWorkflowIn
     candidatesCreated,
     candidatesUpdated,
     committedCandidatesSkipped,
+    terminalCandidatesSkipped,
     model: extraction.model
   };
+}
+
+const preservedExtractionStatuses = [
+  CandidateStatus.APPROVED,
+  CandidateStatus.EDITED_AND_APPROVED,
+  CandidateStatus.REJECTED,
+  CandidateStatus.DUPLICATE,
+  CandidateStatus.UNPROCESSABLE
+] as const;
+
+export function shouldSkipExistingCandidateForExtraction(candidate: {
+  approvedQuestionId: string | null;
+  reviewStatus: CandidateStatus;
+}) {
+  return (
+    candidate.approvedQuestionId !== null ||
+    preservedExtractionStatuses.some((status) => status === candidate.reviewStatus)
+  );
 }
 
 export function candidateFingerprint(candidate: ExtractedQuestionCandidate) {

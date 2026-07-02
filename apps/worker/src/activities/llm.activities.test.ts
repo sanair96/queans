@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { CandidateStatus } from "@queans/db";
 import type { ExtractedQuestionCandidate } from "@queans/providers";
 
-import { candidateFingerprint } from "./llm.activities.js";
+import { candidateFingerprint, shouldSkipExistingCandidateForExtraction } from "./llm.activities.js";
 import { normalizeTaxonomyName } from "./taxonomy.js";
 
 describe("normalizeTaxonomyName", () => {
@@ -49,6 +50,44 @@ describe("candidateFingerprint", () => {
       })
     );
   });
+});
+
+describe("shouldSkipExistingCandidateForExtraction", () => {
+  it("preserves committed candidates during later extraction passes", () => {
+    expect(
+      shouldSkipExistingCandidateForExtraction({
+        approvedQuestionId: "question-1",
+        reviewStatus: CandidateStatus.EXTRACTED
+      })
+    ).toBe(true);
+  });
+
+  it.each([
+    CandidateStatus.APPROVED,
+    CandidateStatus.EDITED_AND_APPROVED,
+    CandidateStatus.REJECTED,
+    CandidateStatus.DUPLICATE,
+    CandidateStatus.UNPROCESSABLE
+  ])("preserves terminal candidate status %s", (reviewStatus) => {
+    expect(
+      shouldSkipExistingCandidateForExtraction({
+        approvedQuestionId: null,
+        reviewStatus
+      })
+    ).toBe(true);
+  });
+
+  it.each([CandidateStatus.EXTRACTED, CandidateStatus.NEEDS_REVIEW])(
+    "allows mutable extraction status %s to be refreshed",
+    (reviewStatus) => {
+      expect(
+        shouldSkipExistingCandidateForExtraction({
+          approvedQuestionId: null,
+          reviewStatus
+        })
+      ).toBe(false);
+    }
+  );
 });
 
 const baseCandidate = {
