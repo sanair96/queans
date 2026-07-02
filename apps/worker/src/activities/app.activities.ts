@@ -8,11 +8,7 @@ import {
 } from "@queans/core";
 import { CandidateStatus, prisma, Prisma, ReviewStatus } from "@queans/db";
 
-import {
-  duplicateMatchThreshold,
-  isDuplicateConflict,
-  questionTextSimilarity
-} from "./duplicate-detection.js";
+import { buildDuplicateMatchInputs } from "./duplicate-detection.js";
 import { candidateOcrConfidence } from "./ocr-confidence.js";
 import { toInputJson } from "../json.js";
 
@@ -142,7 +138,14 @@ export async function detectDuplicateCandidates(input: PaperIngestionWorkflowInp
       select: {
         id: true,
         cleanedQuestionText: true
-      }
+      },
+      orderBy: [
+        { sourcePageStart: "asc" },
+        { pageNumber: "asc" },
+        { questionNumber: "asc" },
+        { createdAt: "asc" },
+        { id: "asc" }
+      ]
     }),
     prisma.question.findMany({
       where: { status: "APPROVED" },
@@ -163,22 +166,8 @@ export async function detectDuplicateCandidates(input: PaperIngestionWorkflowInp
 
   const candidateIds = candidates.map((candidate) => candidate.id);
 
-  if (approvedQuestions.length === 0) {
-    await prisma.duplicateMatch.deleteMany({
-      where: {
-        candidateId: { in: candidateIds }
-      }
-    });
-
-    return {
-      candidatesChecked: candidates.length,
-      duplicateMatchesCreated: 0,
-      duplicateConflicts: 0
-    };
-  }
-
-  let duplicateMatchesCreated = 0;
-  let duplicateConflicts = 0;
+  const duplicateMatches = buildDuplicateMatchInputs(candidates, approvedQuestions);
+  const duplicateConflicts = duplicateMatches.filter((match) => match.conflict).length;
 
   await prisma.$transaction(async (tx) => {
     await tx.duplicateMatch.deleteMany({
@@ -187,36 +176,22 @@ export async function detectDuplicateCandidates(input: PaperIngestionWorkflowInp
       }
     });
 
-    for (const candidate of candidates) {
-      for (const question of approvedQuestions) {
-        const similarity = questionTextSimilarity(candidate.cleanedQuestionText, question.questionText);
-        if (similarity < duplicateMatchThreshold) {
-          continue;
+    for (const match of duplicateMatches) {
+      await tx.duplicateMatch.create({
+        data: {
+          candidateId: match.candidateId,
+          questionId: match.questionId,
+          similarity: match.similarity,
+          conflict: match.conflict,
+          details: toInputJson(match.details)
         }
-
-        const conflict = isDuplicateConflict(similarity);
-        await tx.duplicateMatch.create({
-          data: {
-            candidateId: candidate.id,
-            questionId: question.id,
-            similarity,
-            conflict,
-            details: toInputJson({
-              matchedQuestionText: question.questionText
-            })
-          }
-        });
-        duplicateMatchesCreated += 1;
-        if (conflict) {
-          duplicateConflicts += 1;
-        }
-      }
+      });
     }
   });
 
   return {
     candidatesChecked: candidates.length,
-    duplicateMatchesCreated,
+    duplicateMatchesCreated: duplicateMatches.length,
     duplicateConflicts
   };
 }
