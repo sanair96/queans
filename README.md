@@ -41,11 +41,14 @@ flowchart LR
 
 Copy `.env.example` to `.env` and fill these before runtime testing:
 
+- `INTERNAL_API_TOKEN`
 - `R2_ACCOUNT_ID`
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
 - `R2_BUCKET`
 - `MISTRAL_API_KEY`
+
+Use a long random value for `INTERNAL_API_TOKEN` outside local development. It is required for `POST /api/internal/dispatch-workflows` via the `x-queans-internal-token` header.
 
 Leave `R2_ENDPOINT` empty for the standard Cloudflare R2 endpoint; the provider derives it from `R2_ACCOUNT_ID`, and it also normalizes the copied `<account-id>` placeholder to that derived endpoint. Set it only when using a custom S3-compatible endpoint. `R2_PRESIGN_EXPIRES_SECONDS` defaults to `900` and must stay between `1` and `604800`.
 

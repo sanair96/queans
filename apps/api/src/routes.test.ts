@@ -7,6 +7,7 @@ import {
   ingestionFailureSummary,
   ingestionRunCounts,
   ingestionQueuedPayload,
+  isAuthorizedInternalRequest,
   isActiveIngestionStatus,
   isPrismaUniqueConstraintError,
   mutableReviewItemWhere,
@@ -161,6 +162,39 @@ describe("isActiveIngestionStatus", () => {
     expect(isActiveIngestionStatus("COMPLETED")).toBe(false);
     expect(isActiveIngestionStatus("FAILED")).toBe(false);
     expect(isActiveIngestionStatus("CANCELLED")).toBe(false);
+  });
+});
+
+describe("isAuthorizedInternalRequest", () => {
+  it("accepts the configured internal token header", () => {
+    expect(
+      isAuthorizedInternalRequest(
+        {
+          "x-queans-internal-token": "test-internal-token"
+        },
+        { INTERNAL_API_TOKEN: "test-internal-token" }
+      )
+    ).toBe(true);
+  });
+
+  it("rejects missing, mismatched, and length-mismatched tokens", () => {
+    expect(isAuthorizedInternalRequest({}, { INTERNAL_API_TOKEN: "test-internal-token" })).toBe(false);
+    expect(
+      isAuthorizedInternalRequest(
+        {
+          "x-queans-internal-token": "wrong-internal-token"
+        },
+        { INTERNAL_API_TOKEN: "test-internal-token" }
+      )
+    ).toBe(false);
+    expect(
+      isAuthorizedInternalRequest(
+        {
+          "x-queans-internal-token": "short"
+        },
+        { INTERNAL_API_TOKEN: "test-internal-token" }
+      )
+    ).toBe(false);
   });
 });
 

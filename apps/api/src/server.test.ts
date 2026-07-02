@@ -7,6 +7,7 @@ const apiConfig: ApiConfig = {
   NODE_ENV: "test",
   API_PORT: 4000,
   APP_URL: "http://localhost:3000",
+  INTERNAL_API_TOKEN: "test-internal-token",
   TEMPORAL_ADDRESS: "localhost:7233",
   TEMPORAL_NAMESPACE: "default",
   TEMPORAL_TASK_QUEUE_PAPER_INGESTION: "paper-ingestion",
@@ -161,6 +162,39 @@ describe("buildServer", () => {
           }
         ]
       });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects unauthenticated internal workflow dispatches before loading runtime dependencies", async () => {
+    const app = await buildServer(apiConfig);
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/internal/dispatch-workflows"
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toEqual({ error: "UNAUTHORIZED" });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects internal workflow dispatches with the wrong token", async () => {
+    const app = await buildServer(apiConfig);
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/internal/dispatch-workflows",
+        headers: {
+          "x-queans-internal-token": "wrong-token"
+        }
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toEqual({ error: "UNAUTHORIZED" });
     } finally {
       await app.close();
     }

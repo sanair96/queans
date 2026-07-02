@@ -7,6 +7,7 @@ const apiConfig: ApiConfig = {
   NODE_ENV: "test",
   API_PORT: 4000,
   APP_URL: "http://localhost:3000",
+  INTERNAL_API_TOKEN: "test-internal-token",
   TEMPORAL_ADDRESS: "localhost:7233",
   TEMPORAL_NAMESPACE: "default",
   TEMPORAL_TASK_QUEUE_PAPER_INGESTION: "paper-ingestion",

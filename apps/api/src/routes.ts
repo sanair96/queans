@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import type { FastifyInstance, FastifyReply } from "fastify";
 
@@ -16,6 +16,8 @@ import { toInputJson, toNullableInputJson } from "./json.js";
 interface IdParams {
   id: string;
 }
+
+export const INTERNAL_API_TOKEN_HEADER = "x-queans-internal-token";
 
 export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
   app.get("/health", () => ({ ok: true }));
@@ -385,7 +387,11 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
     return { questions };
   });
 
-  app.post("/api/internal/dispatch-workflows", async () => {
+  app.post("/api/internal/dispatch-workflows", async (request, reply) => {
+    if (!isAuthorizedInternalRequest(request.headers, config)) {
+      return reply.code(401).send({ error: "UNAUTHORIZED" });
+    }
+
     await dispatchPendingWorkflowStarts(config);
     return { ok: true };
   });
@@ -596,6 +602,32 @@ export function mutableReviewItemWhere(id: string) {
 
 export function reviewSignalRunForItem(reviewItem: { workflowRun: { id: string; status: string } }) {
   return isActiveIngestionStatus(reviewItem.workflowRun.status) ? reviewItem.workflowRun : undefined;
+}
+
+export function isAuthorizedInternalRequest(
+  headers: Record<string, string | string[] | undefined>,
+  config: Pick<ApiConfig, "INTERNAL_API_TOKEN">
+) {
+  const token = firstHeaderValue(headers[INTERNAL_API_TOKEN_HEADER]);
+  if (!token) {
+    return false;
+  }
+
+  return constantTimeStringEqual(token, config.INTERNAL_API_TOKEN);
+}
+
+function firstHeaderValue(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function constantTimeStringEqual(left: string, right: string) {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+
+  return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 export function reviewItemAlreadyClosedPayload(reviewItem: ReviewItemMutationState) {
