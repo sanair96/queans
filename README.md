@@ -6,6 +6,8 @@ Question paper ingestion app with direct Cloudflare R2 uploads, Temporal-backed 
 
 The upload request is short-lived. The browser asks the API for a presigned R2 URL, uploads the paper directly to R2, then calls the API to mark the upload complete. That completion call creates a `source_papers` row, creates a `workflow_runs` row, writes a `workflow_start_outbox` row, and starts a Temporal workflow. If Temporal is temporarily unavailable, the durable outbox row can be dispatched again.
 
+Workflow dispatch is claim-based: a dispatcher moves a retryable outbox row to `DISPATCHING` with a short `locked_at` lease before calling Temporal, then marks it `STARTED` after Temporal accepts the workflow. Stale dispatch leases are eligible for retry, so a crashed API process does not leave an upload permanently unprocessed.
+
 The worker keeps large payloads in Postgres and R2. Temporal carries IDs and counts, while activities persist OCR pages, extracted candidates, confidence decisions, review items, final questions, answers, workflow steps, events, and provider cost metadata.
 
 ```mermaid

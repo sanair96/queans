@@ -47,6 +47,7 @@ enum WorkflowStepStatus {
 
 enum OutboxStatus {
   PENDING
+  DISPATCHING
   STARTED
   FAILED
 }
@@ -277,6 +278,7 @@ model WorkflowStartOutbox {
   workflowRun   WorkflowRun  @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
   status        OutboxStatus @default(PENDING)
   attemptCount  Int          @default(0) @map("attempt_count")
+  lockedAt      DateTime?    @map("locked_at")
   lastError     String?      @map("last_error")
   createdAt     DateTime     @default(now()) @map("created_at")
   updatedAt     DateTime     @updatedAt @map("updated_at")

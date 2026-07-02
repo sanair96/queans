@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   retryableWorkflowStartOutboxWhere,
+  workflowDispatchClaimUpdate,
+  workflowDispatchClaimWhere,
   workflowDispatchFailureUpdate,
+  workflowDispatchStaleBefore,
   workflowDispatchSuccessOutboxUpdate,
   workflowDispatchSuccessRunUpdate,
   workflowDispatchSuccessSourcePaperUpdate,
@@ -11,21 +14,61 @@ import {
 
 describe("workflow start outbox helpers", () => {
   it("selects pending rows and failed rows below the retry cap", () => {
-    expect(retryableWorkflowStartOutboxWhere(3)).toEqual({
+    const staleBefore = new Date("2026-07-02T10:00:00.000Z");
+
+    expect(retryableWorkflowStartOutboxWhere(3, staleBefore)).toEqual({
       OR: [
         { status: "PENDING" },
         {
           status: "FAILED",
           attemptCount: { lt: 3 }
+        },
+        {
+          status: "DISPATCHING",
+          attemptCount: { lt: 3 },
+          OR: [{ lockedAt: null }, { lockedAt: { lt: staleBefore } }]
         }
       ]
     });
   });
 
+  it("claims one retryable row before calling Temporal", () => {
+    const staleBefore = new Date("2026-07-02T10:00:00.000Z");
+    const lockedAt = new Date("2026-07-02T10:05:00.000Z");
+
+    expect(workflowDispatchClaimWhere("outbox-1", 3, staleBefore)).toEqual({
+      id: "outbox-1",
+      OR: [
+        { status: "PENDING" },
+        {
+          status: "FAILED",
+          attemptCount: { lt: 3 }
+        },
+        {
+          status: "DISPATCHING",
+          attemptCount: { lt: 3 },
+          OR: [{ lockedAt: null }, { lockedAt: { lt: staleBefore } }]
+        }
+      ]
+    });
+    expect(workflowDispatchClaimUpdate(lockedAt)).toEqual({
+      status: "DISPATCHING",
+      attemptCount: { increment: 1 },
+      lockedAt,
+      lastError: null
+    });
+  });
+
+  it("computes the stale dispatch cutoff from the configured lease window", () => {
+    expect(workflowDispatchStaleBefore(new Date("2026-07-02T10:05:00.000Z"))).toEqual(
+      new Date("2026-07-02T10:00:00.000Z")
+    );
+  });
+
   it("records a useful error message for dispatch failures", () => {
     expect(workflowDispatchFailureUpdate(new Error("temporal unavailable"))).toEqual({
       status: "FAILED",
-      attemptCount: { increment: 1 },
+      lockedAt: null,
       lastError: "temporal unavailable"
     });
   });
@@ -33,7 +76,7 @@ describe("workflow start outbox helpers", () => {
   it("records an opaque message for non-error dispatch failures", () => {
     expect(workflowDispatchFailureUpdate("failed")).toEqual({
       status: "FAILED",
-      attemptCount: { increment: 1 },
+      lockedAt: null,
       lastError: "Unknown workflow dispatch error"
     });
   });
@@ -54,7 +97,7 @@ describe("workflow start outbox helpers", () => {
     });
     expect(workflowDispatchSuccessOutboxUpdate()).toEqual({
       status: "STARTED",
-      attemptCount: { increment: 1 },
+      lockedAt: null,
       lastError: null
     });
   });

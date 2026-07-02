@@ -6,9 +6,11 @@ import { startPaperIngestionWorkflow } from "./temporal.js";
 import type { StartedPaperIngestionWorkflow } from "./temporal.js";
 
 export const WORKFLOW_DISPATCH_MAX_ATTEMPTS = 12;
+export const WORKFLOW_DISPATCH_STALE_LOCK_MS = 5 * 60 * 1000;
 
 export function retryableWorkflowStartOutboxWhere(
-  maxAttempts = WORKFLOW_DISPATCH_MAX_ATTEMPTS
+  maxAttempts = WORKFLOW_DISPATCH_MAX_ATTEMPTS,
+  staleBefore = workflowDispatchStaleBefore()
 ): Prisma.WorkflowStartOutboxWhereInput {
   return {
     OR: [
@@ -16,15 +18,44 @@ export function retryableWorkflowStartOutboxWhere(
       {
         status: "FAILED",
         attemptCount: { lt: maxAttempts }
+      },
+      {
+        status: "DISPATCHING",
+        attemptCount: { lt: maxAttempts },
+        OR: [{ lockedAt: null }, { lockedAt: { lt: staleBefore } }]
       }
     ]
   };
 }
 
+export function workflowDispatchStaleBefore(now = new Date()) {
+  return new Date(now.getTime() - WORKFLOW_DISPATCH_STALE_LOCK_MS);
+}
+
+export function workflowDispatchClaimWhere(
+  id: string,
+  maxAttempts = WORKFLOW_DISPATCH_MAX_ATTEMPTS,
+  staleBefore = workflowDispatchStaleBefore()
+) {
+  return {
+    id,
+    ...retryableWorkflowStartOutboxWhere(maxAttempts, staleBefore)
+  } satisfies Prisma.WorkflowStartOutboxWhereInput;
+}
+
+export function workflowDispatchClaimUpdate(lockedAt = new Date()) {
+  return {
+    status: "DISPATCHING",
+    attemptCount: { increment: 1 },
+    lockedAt,
+    lastError: null
+  } satisfies Prisma.WorkflowStartOutboxUpdateManyMutationInput;
+}
+
 export function workflowDispatchFailureUpdate(error: unknown): Prisma.WorkflowStartOutboxUpdateInput {
   return {
     status: "FAILED",
-    attemptCount: { increment: 1 },
+    lockedAt: null,
     lastError: error instanceof Error ? error.message : "Unknown workflow dispatch error"
   };
 }
@@ -53,20 +84,29 @@ export function workflowDispatchSuccessSourcePaperUpdate() {
 export function workflowDispatchSuccessOutboxUpdate() {
   return {
     status: "STARTED",
-    attemptCount: { increment: 1 },
+    lockedAt: null,
     lastError: null
   } satisfies Prisma.WorkflowStartOutboxUpdateInput;
 }
 
 export async function dispatchPendingWorkflowStarts(config: ApiConfig, limit = 10, maxAttempts = WORKFLOW_DISPATCH_MAX_ATTEMPTS) {
+  const staleBefore = workflowDispatchStaleBefore();
   const pending = await prisma.workflowStartOutbox.findMany({
-    where: retryableWorkflowStartOutboxWhere(maxAttempts),
+    where: retryableWorkflowStartOutboxWhere(maxAttempts, staleBefore),
     include: { workflowRun: true },
     orderBy: { createdAt: "asc" },
     take: limit
   });
 
   for (const item of pending) {
+    const claim = await prisma.workflowStartOutbox.updateMany({
+      where: workflowDispatchClaimWhere(item.id, maxAttempts, staleBefore),
+      data: workflowDispatchClaimUpdate()
+    });
+    if (claim.count === 0) {
+      continue;
+    }
+
     try {
       if (item.workflowRun.workflowType !== WorkflowType.PAPER_INGESTION || !item.workflowRun.sourcePaperId) {
         throw new Error(`Unsupported workflow outbox item ${item.id}`);
