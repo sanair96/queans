@@ -5,7 +5,8 @@ import {
   workflowDispatchFailureUpdate,
   workflowDispatchSuccessOutboxUpdate,
   workflowDispatchSuccessRunUpdate,
-  workflowDispatchSuccessSourcePaperUpdate
+  workflowDispatchSuccessSourcePaperUpdate,
+  workflowStartedEventPayload
 } from "./outbox.js";
 
 describe("workflow start outbox helpers", () => {
@@ -38,7 +39,12 @@ describe("workflow start outbox helpers", () => {
   });
 
   it("marks the run, source paper, and outbox as started after Temporal accepts dispatch", () => {
-    expect(workflowDispatchSuccessRunUpdate("temporal-run-1")).toEqual({
+    const startedWorkflow = {
+      workflowId: "paper-ingestion/workflow-run-1",
+      temporalRunId: "temporal-run-1"
+    };
+
+    expect(workflowDispatchSuccessRunUpdate(startedWorkflow)).toEqual({
       temporalRunId: "temporal-run-1",
       status: "RUNNING",
       currentStep: "store_file"
@@ -50,6 +56,18 @@ describe("workflow start outbox helpers", () => {
       status: "STARTED",
       attemptCount: { increment: 1 },
       lastError: null
+    });
+  });
+
+  it("records both the Temporal workflow id and run id in the started event payload", () => {
+    expect(
+      workflowStartedEventPayload({
+        workflowId: "paper-ingestion/workflow-run-1",
+        temporalRunId: "temporal-run-1"
+      })
+    ).toEqual({
+      temporalWorkflowId: "paper-ingestion/workflow-run-1",
+      temporalRunId: "temporal-run-1"
     });
   });
 });

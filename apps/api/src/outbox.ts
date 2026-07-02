@@ -3,6 +3,7 @@ import type { Prisma } from "@queans/db";
 
 import type { ApiConfig } from "./config.js";
 import { startPaperIngestionWorkflow } from "./temporal.js";
+import type { StartedPaperIngestionWorkflow } from "./temporal.js";
 
 export const WORKFLOW_DISPATCH_MAX_ATTEMPTS = 12;
 
@@ -28,12 +29,19 @@ export function workflowDispatchFailureUpdate(error: unknown): Prisma.WorkflowSt
   };
 }
 
-export function workflowDispatchSuccessRunUpdate(workflowId: string) {
+export function workflowDispatchSuccessRunUpdate(startedWorkflow: StartedPaperIngestionWorkflow) {
   return {
-    temporalRunId: workflowId,
+    temporalRunId: startedWorkflow.temporalRunId,
     status: "RUNNING",
     currentStep: "store_file"
   } satisfies Prisma.WorkflowRunUpdateInput;
+}
+
+export function workflowStartedEventPayload(startedWorkflow: StartedPaperIngestionWorkflow) {
+  return {
+    temporalWorkflowId: startedWorkflow.workflowId,
+    temporalRunId: startedWorkflow.temporalRunId
+  };
 }
 
 export function workflowDispatchSuccessSourcePaperUpdate() {
@@ -64,7 +72,7 @@ export async function dispatchPendingWorkflowStarts(config: ApiConfig, limit = 1
         throw new Error(`Unsupported workflow outbox item ${item.id}`);
       }
 
-      const workflowId = await startPaperIngestionWorkflow(config, {
+      const startedWorkflow = await startPaperIngestionWorkflow(config, {
         ingestionRunId: item.workflowRunId,
         sourcePaperId: item.workflowRun.sourcePaperId
       });
@@ -72,7 +80,7 @@ export async function dispatchPendingWorkflowStarts(config: ApiConfig, limit = 1
       await prisma.$transaction([
         prisma.workflowRun.update({
           where: { id: item.workflowRunId },
-          data: workflowDispatchSuccessRunUpdate(workflowId)
+          data: workflowDispatchSuccessRunUpdate(startedWorkflow)
         }),
         prisma.sourcePaper.update({
           where: { id: item.workflowRun.sourcePaperId },
@@ -86,7 +94,7 @@ export async function dispatchPendingWorkflowStarts(config: ApiConfig, limit = 1
           data: {
             workflowRunId: item.workflowRunId,
             eventType: "WORKFLOW_STARTED",
-            eventPayload: { temporalWorkflowId: workflowId }
+            eventPayload: workflowStartedEventPayload(startedWorkflow)
           }
         })
       ]);

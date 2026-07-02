@@ -12,6 +12,11 @@ import type { ApiConfig } from "./config.js";
 
 let temporalClient: Client | undefined;
 
+export interface StartedPaperIngestionWorkflow {
+  workflowId: string;
+  temporalRunId: string;
+}
+
 export async function getTemporalClient(config: ApiConfig) {
   if (temporalClient) {
     return temporalClient;
@@ -31,11 +36,11 @@ export async function startPaperIngestionWorkflow(
     ingestionRunId: string;
     sourcePaperId: string;
   }
-) {
+): Promise<StartedPaperIngestionWorkflow> {
   const client = await getTemporalClient(config);
   const workflowId = paperIngestionWorkflowId(input.ingestionRunId);
   try {
-    await client.workflow.start(PAPER_INGESTION_WORKFLOW_TYPE, {
+    const handle = await client.workflow.start(PAPER_INGESTION_WORKFLOW_TYPE, {
       taskQueue: config.TEMPORAL_TASK_QUEUE_PAPER_INGESTION,
       workflowId,
       workflowIdConflictPolicy: WorkflowIdConflictPolicy.USE_EXISTING,
@@ -50,13 +55,21 @@ export async function startPaperIngestionWorkflow(
         }
       ]
     });
+    return {
+      workflowId,
+      temporalRunId: handle.firstExecutionRunId
+    };
   } catch (error) {
     if (error instanceof WorkflowExecutionAlreadyStartedError) {
-      return workflowId;
+      const existingWorkflow = client.workflow.getHandle(workflowId);
+      const description = await existingWorkflow.describe();
+      return {
+        workflowId,
+        temporalRunId: description.runId
+      };
     }
     throw error;
   }
-  return workflowId;
 }
 
 export async function signalHumanReviewCompleted(
