@@ -40,6 +40,7 @@ interface ReviewWorkbenchProps {
 
 interface ReviewDraft {
   cleanedQuestionText: string;
+  questionType: string;
   answerText: string;
   solutionText: string;
   marks: string;
@@ -48,6 +49,17 @@ interface ReviewDraft {
 }
 
 type ReviewDecision = "APPROVE" | "EDIT_AND_APPROVE" | "REJECT" | "MARK_DUPLICATE" | "MARK_UNPROCESSABLE";
+
+const questionTypeOptions = [
+  { value: "MCQ", label: "MCQ" },
+  { value: "SHORT_ANSWER", label: "Short answer" },
+  { value: "LONG_ANSWER", label: "Long answer" },
+  { value: "NUMERICAL", label: "Numerical" },
+  { value: "TRUE_FALSE", label: "True / false" },
+  { value: "FILL_IN_THE_BLANK", label: "Fill in the blank" },
+  { value: "MATCHING", label: "Matching" },
+  { value: "DIAGRAM", label: "Diagram" }
+] as const;
 
 export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
   const [items, setItems] = useState(initialItems);
@@ -214,6 +226,20 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
               />
             </label>
             <label>
+              Question type
+              <select
+                value={draft.questionType}
+                onChange={(event) => setDraft((current) => ({ ...current, questionType: event.target.value }))}
+              >
+                <option value="UNKNOWN">Select type</option>
+                {questionTypeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
               Answer
               <textarea
                 value={draft.answerText}
@@ -261,6 +287,7 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
 function draftFromItem(item: ReviewItem | undefined): ReviewDraft {
   return {
     cleanedQuestionText: item?.candidate.cleanedQuestionText ?? "",
+    questionType: item?.candidate.questionType ?? "UNKNOWN",
     answerText: item?.candidate.answerText ?? "",
     solutionText: item?.candidate.solutionText ?? "",
     marks: item?.candidate.marks === null || item?.candidate.marks === undefined ? "" : String(item.candidate.marks),
@@ -276,6 +303,7 @@ function reviewPatchBody(item: ReviewItem, draft: ReviewDraft, decision: ReviewD
       ? {
           candidate: {
             cleanedQuestionText: draft.cleanedQuestionText,
+            questionType: draft.questionType,
             answerText: draft.answerText,
             solutionText: draft.solutionText,
             marks: parseMarksDraft(draft.marks),
@@ -296,6 +324,7 @@ function reviewPatchBody(item: ReviewItem, draft: ReviewDraft, decision: ReviewD
 function correctionsFromDraft(item: ReviewItem, draft: ReviewDraft) {
   return [
     correction("cleanedQuestionText", item.candidate.cleanedQuestionText, draft.cleanedQuestionText, "OCR_ERROR"),
+    correction("questionType", item.candidate.questionType, draft.questionType, "FORMATTING_ISSUE"),
     correction("answerText", item.candidate.answerText ?? "", draft.answerText, "WRONG_ANSWER"),
     correction("solutionText", item.candidate.solutionText ?? "", draft.solutionText, "BAD_SOLUTION"),
     correction("marks", item.candidate.marks === null ? "" : String(item.candidate.marks), draft.marks, "WRONG_MARKS"),

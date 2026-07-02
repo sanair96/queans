@@ -70,6 +70,7 @@ describe("candidateUpdateForReviewedItem", () => {
       candidateUpdateForReviewedItem("EDITED", "EDIT_AND_APPROVE", {
         candidate: {
           cleanedQuestionText: "  What is inertia?  ",
+          questionType: "SHORT_ANSWER",
           answerText: "  The tendency to resist a change in motion.  ",
           solutionText: "   ",
           marks: null,
@@ -78,6 +79,7 @@ describe("candidateUpdateForReviewedItem", () => {
       })
     ).toEqual({
       cleanedQuestionText: "What is inertia?",
+      questionType: "SHORT_ANSWER",
       answerText: "The tendency to resist a change in motion.",
       solutionText: null,
       marks: null,

@@ -6,7 +6,7 @@ import {
   type ReviewReasonCode,
   type WorkflowFailurePayload
 } from "@queans/core";
-import { CandidateStatus, prisma, Prisma, ReviewStatus } from "@queans/db";
+import { CandidateStatus, prisma, Prisma, QuestionType, ReviewStatus } from "@queans/db";
 
 import { buildDuplicateMatchInputs } from "./duplicate-detection.js";
 import { candidateOcrConfidence } from "./ocr-confidence.js";
@@ -726,6 +726,9 @@ function candidatePatchFromReviewPayload(value: Prisma.JsonValue): Prisma.Questi
   if ("marks" in candidate && (typeof candidate.marks === "number" || candidate.marks === null)) {
     patch.marks = candidate.marks;
   }
+  if ("questionType" in candidate && typeof candidate.questionType === "string" && isReviewedQuestionType(candidate.questionType)) {
+    patch.questionType = candidate.questionType;
+  }
   if ("answerSourceType" in candidate && candidate.answerSourceType === "SOURCE_KEY") {
     patch.answerSourceType = candidate.answerSourceType;
     patch.answerSourceBacked = true;
@@ -743,4 +746,19 @@ function trimmedNonEmptyString(value: string) {
 
 function nullableTrimmedString(value: string) {
   return trimmedNonEmptyString(value) ?? null;
+}
+
+const reviewedQuestionTypes = [
+  QuestionType.MCQ,
+  QuestionType.SHORT_ANSWER,
+  QuestionType.LONG_ANSWER,
+  QuestionType.NUMERICAL,
+  QuestionType.TRUE_FALSE,
+  QuestionType.FILL_IN_THE_BLANK,
+  QuestionType.MATCHING,
+  QuestionType.DIAGRAM
+] as const;
+
+function isReviewedQuestionType(value: string): value is (typeof reviewedQuestionTypes)[number] {
+  return reviewedQuestionTypes.some((questionType) => questionType === value);
 }

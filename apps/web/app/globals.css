@@ -36,6 +36,7 @@ a {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -491,6 +492,7 @@ h2 {
 }
 
 .edit-pane input,
+.edit-pane select,
 .edit-pane textarea {
   width: 100%;
   border: 1px solid var(--line);

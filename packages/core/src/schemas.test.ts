@@ -98,6 +98,7 @@ describe("reviewPatchSchema", () => {
         reviewPayload: {
           candidate: {
             cleanedQuestionText: "What is inertia?",
+            questionType: "SHORT_ANSWER",
             answerText: "The tendency to resist change in motion.",
             solutionText: "",
             marks: 2,
@@ -117,6 +118,7 @@ describe("reviewPatchSchema", () => {
         reviewPayload: {
           candidate: {
             cleanedQuestionText: " ",
+            questionType: "SHORT_ANSWER",
             answerText: "Valid answer"
           }
         }
@@ -129,11 +131,27 @@ describe("reviewPatchSchema", () => {
         reviewPayload: {
           candidate: {
             cleanedQuestionText: "Valid question",
+            questionType: "SHORT_ANSWER",
             answerText: ""
           }
         }
       })
     ).toThrow("Answer text is required for edit approval.");
+  });
+
+  it("rejects edit approval without a resolved question type", () => {
+    expect(() =>
+      reviewPatchSchema.parse({
+        decision: "EDIT_AND_APPROVE",
+        reviewPayload: {
+          candidate: {
+            cleanedQuestionText: "Valid question",
+            questionType: "UNKNOWN",
+            answerText: "Valid answer"
+          }
+        }
+      })
+    ).toThrow("Question type is required for edit approval.");
   });
 
   it("does not require edit payloads for non-edit decisions", () => {

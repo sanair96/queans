@@ -146,6 +146,7 @@ describe("buildServer", () => {
           reviewPayload: {
             candidate: {
               cleanedQuestionText: "",
+              questionType: "SHORT_ANSWER",
               answerText: "Valid answer"
             }
           }

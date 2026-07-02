@@ -43,9 +43,17 @@ const reviewDecisionSchema = z.enum([
   "MARK_UNPROCESSABLE"
 ]);
 
+const reviewedQuestionTypeSchema = z.enum(
+  ["MCQ", "SHORT_ANSWER", "LONG_ANSWER", "NUMERICAL", "TRUE_FALSE", "FILL_IN_THE_BLANK", "MATCHING", "DIAGRAM"],
+  {
+    errorMap: () => ({ message: "Question type is required for edit approval." })
+  }
+);
+
 const editAndApprovePayloadSchema = z.object({
   candidate: z.object({
     cleanedQuestionText: z.string().trim().min(1, "Question text is required for edit approval."),
+    questionType: reviewedQuestionTypeSchema,
     answerText: z.string().trim().min(1, "Answer text is required for edit approval."),
     solutionText: z.string().optional(),
     marks: z.number().nonnegative().nullable().optional(),
