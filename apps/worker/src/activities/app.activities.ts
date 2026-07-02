@@ -388,26 +388,53 @@ export async function hasOpenReviewItems(input: PaperIngestionWorkflowInput) {
 }
 
 export async function markWaitingForReview(input: PaperIngestionWorkflowInput) {
-  await prisma.$transaction([
-    prisma.workflowRun.update({
-      where: { id: input.ingestionRunId },
-      data: {
-        status: "WAITING_FOR_REVIEW",
-        currentStep: "wait_for_review"
-      }
-    }),
-    prisma.sourcePaper.update({
+  await prisma.$transaction(async (tx) => {
+    const workflowRunUpdate = await tx.workflowRun.updateMany({
+      where: workflowRunCanEnterReviewWaitWhere(input),
+      data: workflowRunWaitingForReviewUpdate()
+    });
+
+    if (workflowRunUpdate.count === 0) {
+      return;
+    }
+
+    await tx.sourcePaper.update({
       where: { id: input.sourcePaperId },
-      data: { status: "WAITING_FOR_REVIEW" }
-    }),
-    prisma.workflowEvent.create({
-      data: {
-        workflowRunId: input.ingestionRunId,
-        eventType: "REVIEW_TASK_CREATED",
-        eventPayload: {}
-      }
-    })
-  ]);
+      data: sourcePaperWaitingForReviewUpdate()
+    });
+
+    await tx.workflowEvent.create({
+      data: reviewTaskCreatedEventCreateData(input)
+    });
+  });
+}
+
+export function workflowRunCanEnterReviewWaitWhere(input: PaperIngestionWorkflowInput) {
+  return {
+    id: input.ingestionRunId,
+    status: { in: ["PENDING", "RUNNING"] }
+  } satisfies Prisma.WorkflowRunWhereInput;
+}
+
+export function workflowRunWaitingForReviewUpdate() {
+  return {
+    status: "WAITING_FOR_REVIEW",
+    currentStep: "wait_for_review"
+  } satisfies Prisma.WorkflowRunUpdateManyMutationInput;
+}
+
+export function sourcePaperWaitingForReviewUpdate() {
+  return {
+    status: "WAITING_FOR_REVIEW"
+  } satisfies Prisma.SourcePaperUpdateInput;
+}
+
+export function reviewTaskCreatedEventCreateData(input: PaperIngestionWorkflowInput) {
+  return {
+    workflowRunId: input.ingestionRunId,
+    eventType: "REVIEW_TASK_CREATED",
+    eventPayload: {}
+  } satisfies Prisma.WorkflowEventUncheckedCreateInput;
 }
 
 export async function applyReviewedItems(input: PaperIngestionWorkflowInput) {

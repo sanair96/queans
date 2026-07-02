@@ -3,12 +3,16 @@ import { describe, expect, it } from "vitest";
 import {
   completableWorkflowStepWhere,
   failedWorkflowStepTargetWhere,
+  reviewTaskCreatedEventCreateData,
   runningWorkflowStepWhere,
   sourcePaperFailedUpdate,
+  sourcePaperWaitingForReviewUpdate,
   sourcePaperUpdateForStartedWorkflowStep,
   workflowFailedEventCreateData,
+  workflowRunCanEnterReviewWaitWhere,
   workflowRunCanFailWhere,
   workflowRunFailedUpdate,
+  workflowRunWaitingForReviewUpdate,
   workflowRunUpdateForStartedStep,
   workflowStepCompletedEventCreateData,
   workflowStepCreateData,
@@ -97,6 +101,42 @@ describe("sourcePaperUpdateForStartedWorkflowStep", () => {
   it("marks the source paper as processing while workflow activities run", () => {
     expect(sourcePaperUpdateForStartedWorkflowStep()).toEqual({
       status: "PROCESSING"
+    });
+  });
+});
+
+describe("workflowRunCanEnterReviewWaitWhere", () => {
+  it("allows active runs to enter review wait without rewriting terminal or already-waiting runs", () => {
+    expect(workflowRunCanEnterReviewWaitWhere(workflowInput)).toEqual({
+      id: "run-1",
+      status: { in: ["PENDING", "RUNNING"] }
+    });
+  });
+});
+
+describe("workflowRunWaitingForReviewUpdate", () => {
+  it("moves the workflow pointer to the review wait step", () => {
+    expect(workflowRunWaitingForReviewUpdate()).toEqual({
+      status: "WAITING_FOR_REVIEW",
+      currentStep: "wait_for_review"
+    });
+  });
+});
+
+describe("sourcePaperWaitingForReviewUpdate", () => {
+  it("marks the source paper as waiting for review", () => {
+    expect(sourcePaperWaitingForReviewUpdate()).toEqual({
+      status: "WAITING_FOR_REVIEW"
+    });
+  });
+});
+
+describe("reviewTaskCreatedEventCreateData", () => {
+  it("records the transition into human review", () => {
+    expect(reviewTaskCreatedEventCreateData(workflowInput)).toEqual({
+      workflowRunId: "run-1",
+      eventType: "REVIEW_TASK_CREATED",
+      eventPayload: {}
     });
   });
 });

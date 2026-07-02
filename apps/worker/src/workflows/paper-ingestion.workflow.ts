@@ -85,10 +85,10 @@ export async function PaperIngestionWorkflow(input: PaperIngestionWorkflowInput)
     await app.recordStepSucceeded(input, "validate_candidates", reviewSummary);
 
     while (await app.hasOpenReviewItems(input)) {
-      currentStep = "wait_for_review";
-      await app.markWaitingForReview(input);
-
       while (true) {
+        currentStep = "wait_for_review";
+        await app.markWaitingForReview(input);
+
         const previousSignalCount = reviewSignalCount;
         const reviewStillOpen = await app.hasOpenReviewItems(input);
         if (!reviewStillOpen) {
