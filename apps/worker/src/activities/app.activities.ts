@@ -530,52 +530,93 @@ export async function markWorkflowFailed(
   failurePayload: WorkflowFailurePayload
 ) {
   const latestRunningStep = await prisma.workflowStep.findFirst({
-    where: {
-      workflowRunId: input.ingestionRunId,
-      stepName,
-      status: "RUNNING"
-    },
+    where: failedWorkflowStepTargetWhere(input, stepName),
     orderBy: { startedAt: "desc" }
   });
 
   await prisma.$transaction(async (tx) => {
+    const workflowRunUpdate = await tx.workflowRun.updateMany({
+      where: workflowRunCanFailWhere(input),
+      data: workflowRunFailedUpdate(stepName, failurePayload)
+    });
+
+    if (workflowRunUpdate.count === 0) {
+      return;
+    }
+
     if (latestRunningStep) {
       await tx.workflowStep.update({
         where: { id: latestRunningStep.id },
-        data: {
-          status: "FAILED",
-          completedAt: new Date(),
-          errorPayload: toInputJson(failurePayload)
-        }
+        data: workflowStepFailedUpdate(failurePayload)
       });
     }
 
-    await tx.workflowRun.update({
-      where: { id: input.ingestionRunId },
-      data: {
-        status: "FAILED",
-        currentStep: stepName,
-        errorPayload: toInputJson(failurePayload),
-        completedAt: new Date()
-      }
-    });
-
     await tx.sourcePaper.update({
       where: { id: input.sourcePaperId },
-      data: { status: "FAILED" }
+      data: sourcePaperFailedUpdate()
     });
 
     await tx.workflowEvent.create({
-      data: {
-        workflowRunId: input.ingestionRunId,
-        eventType: "WORKFLOW_FAILED",
-        eventPayload: toInputJson({
-          stepName,
-          ...failurePayload
-        })
-      }
+      data: workflowFailedEventCreateData(input, stepName, failurePayload)
     });
   });
+}
+
+export function failedWorkflowStepTargetWhere(input: PaperIngestionWorkflowInput, stepName: PaperIngestionStep) {
+  return {
+    workflowRunId: input.ingestionRunId,
+    stepName,
+    status: "RUNNING"
+  } satisfies Prisma.WorkflowStepWhereInput;
+}
+
+export function workflowRunCanFailWhere(input: PaperIngestionWorkflowInput) {
+  return {
+    id: input.ingestionRunId,
+    status: { in: ["PENDING", "RUNNING", "WAITING_FOR_REVIEW"] }
+  } satisfies Prisma.WorkflowRunWhereInput;
+}
+
+export function workflowStepFailedUpdate(failurePayload: WorkflowFailurePayload, completedAt = new Date()) {
+  return {
+    status: "FAILED",
+    completedAt,
+    errorPayload: toInputJson(failurePayload)
+  } satisfies Prisma.WorkflowStepUpdateInput;
+}
+
+export function workflowRunFailedUpdate(
+  stepName: PaperIngestionStep,
+  failurePayload: WorkflowFailurePayload,
+  completedAt = new Date()
+) {
+  return {
+    status: "FAILED",
+    currentStep: stepName,
+    errorPayload: toInputJson(failurePayload),
+    completedAt
+  } satisfies Prisma.WorkflowRunUpdateManyMutationInput;
+}
+
+export function sourcePaperFailedUpdate() {
+  return {
+    status: "FAILED"
+  } satisfies Prisma.SourcePaperUpdateInput;
+}
+
+export function workflowFailedEventCreateData(
+  input: PaperIngestionWorkflowInput,
+  stepName: PaperIngestionStep,
+  failurePayload: WorkflowFailurePayload
+) {
+  return {
+    workflowRunId: input.ingestionRunId,
+    eventType: "WORKFLOW_FAILED",
+    eventPayload: toInputJson({
+      stepName,
+      ...failurePayload
+    })
+  } satisfies Prisma.WorkflowEventUncheckedCreateInput;
 }
 
 function confidenceRecord(value: Prisma.JsonValue) {
