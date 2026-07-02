@@ -8,6 +8,9 @@ import { assertOk } from "./api-errors";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 const maxUploadByteSize = 50 * 1024 * 1024;
+const missingUploadFileMessage = "Choose a PDF before uploading.";
+const unsupportedUploadTypeMessage = "Only PDF uploads are supported.";
+const oversizedUploadFileMessage = "Choose a PDF that is 50 MB or smaller.";
 
 interface UploadInitResponse {
   uploadId: string;
@@ -51,23 +54,20 @@ export function UploadPanel() {
   const [busy, setBusy] = useState(false);
 
   async function upload() {
-    if (!file) {
-      setStatus("Choose a PDF before uploading.");
+    const selectedFile = file;
+    setRun(null);
+    if (!selectedFile) {
+      setStatus(missingUploadFileMessage);
       return;
     }
 
-    if (file.type !== "application/pdf") {
-      setStatus("Only PDF uploads are supported.");
-      return;
-    }
-
-    if (file.size > maxUploadByteSize) {
-      setStatus("Choose a PDF that is 50 MB or smaller.");
+    const validationMessage = uploadFileValidationMessage(selectedFile);
+    if (validationMessage) {
+      setStatus(validationMessage);
       return;
     }
 
     setBusy(true);
-    setRun(null);
     try {
       const paperContextPayload = buildPaperContextPayload(paperContext);
 
@@ -76,9 +76,9 @@ export function UploadPanel() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          fileName: file.name,
-          mimeType: file.type || "application/octet-stream",
-          byteSize: file.size
+          fileName: selectedFile.name,
+          mimeType: selectedFile.type || "application/octet-stream",
+          byteSize: selectedFile.size
         })
       });
       await assertOk(initResponse, "Upload session");
@@ -87,8 +87,8 @@ export function UploadPanel() {
       setStatus("Uploading file to R2.");
       const uploadResponse = await fetch(init.uploadUrl, {
         method: "PUT",
-        headers: { "Content-Type": file.type || "application/octet-stream" },
-        body: file
+        headers: { "Content-Type": selectedFile.type || "application/octet-stream" },
+        body: selectedFile
       });
       await assertOk(uploadResponse, "R2 upload");
 
@@ -98,7 +98,7 @@ export function UploadPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           etag: uploadResponse.headers.get("ETag") ?? undefined,
-          byteSize: file.size,
+          byteSize: selectedFile.size,
           paperContext: paperContextPayload
         })
       });
@@ -249,4 +249,20 @@ function optionalYear(value: string) {
     throw new Error("Year must be between 1900 and 2200.");
   }
   return year;
+}
+
+export function uploadFileValidationMessage(file: Pick<File, "type" | "size"> | null) {
+  if (!file) {
+    return missingUploadFileMessage;
+  }
+
+  if (file.type !== "application/pdf") {
+    return unsupportedUploadTypeMessage;
+  }
+
+  if (file.size > maxUploadByteSize) {
+    return oversizedUploadFileMessage;
+  }
+
+  return undefined;
 }
