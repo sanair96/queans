@@ -191,16 +191,8 @@ h2 {
 
 .upload-layout {
   display: grid;
-  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
-}
-
-.context-form {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  align-content: start;
 }
 
 .field {
@@ -858,7 +850,6 @@ h2 {
   .grid.two,
   .stat-row,
   .upload-layout,
-  .context-form,
   .review-workbench,
   .review-columns,
   .lookup-form,
