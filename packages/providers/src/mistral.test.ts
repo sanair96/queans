@@ -220,7 +220,7 @@ describe("MistralQuestionExtractor", () => {
 });
 
 describe("MistralBatchProvider", () => {
-  it("builds OCR batch lines with markdown tables, confidence, and image extraction enabled", () => {
+  it("builds OCR batch lines without synchronous-only OCR options", () => {
     const provider = new MistralBatchProvider(testMistralConfig);
 
     expect(
@@ -234,10 +234,7 @@ describe("MistralBatchProvider", () => {
         document: {
           type: "document_url",
           document_url: "https://r2.example/source.pdf"
-        },
-        confidence_scores_granularity: "word",
-        table_format: "markdown",
-        include_image_base64: true
+        }
       }
     });
   });

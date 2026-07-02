@@ -302,10 +302,7 @@ export class MistralBatchProvider {
         document: {
           type: "document_url",
           document_url: input.documentUrl
-        },
-        confidence_scores_granularity: "word",
-        table_format: "markdown",
-        include_image_base64: true
+        }
       }
     };
   }
