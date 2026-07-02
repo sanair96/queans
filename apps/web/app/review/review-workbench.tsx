@@ -99,10 +99,15 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
 
       await assertOk(response, "Review update");
 
-      const remaining = items.filter((item) => item.id !== selected.id);
-      setItems(remaining);
-      setSelectedId(remaining[0]?.id ?? "");
-      setStatus("Saved.");
+      if (shouldRemoveReviewItemAfterDecision(decision)) {
+        const remaining = items.filter((item) => item.id !== selected.id);
+        setItems(remaining);
+        setSelectedId(remaining[0]?.id ?? "");
+        setStatus("Saved.");
+      } else {
+        setItems(items.map((item) => (item.id === selected.id ? { ...item, status: "ASSIGNED" } : item)));
+        setStatus("Marked as needing more info.");
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Review update failed.");
     } finally {
@@ -361,6 +366,10 @@ function reviewPatchBody(item: ReviewItem, draft: ReviewDraft, decision: ReviewD
     reviewPayload,
     corrections
   };
+}
+
+export function shouldRemoveReviewItemAfterDecision(decision: string) {
+  return decision !== "NEEDS_MORE_INFO";
 }
 
 function correctionsFromDraft(item: ReviewItem, draft: ReviewDraft) {

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import * as React from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { ReviewWorkbench } from "./review-workbench";
+import { ReviewWorkbench, shouldRemoveReviewItemAfterDecision } from "./review-workbench";
 
 vi.stubGlobal("React", React);
 
@@ -13,6 +13,19 @@ describe("ReviewWorkbench", () => {
     expect(html).toContain("Needs info");
     expect(html).toContain("title=\"Needs more info\"");
   });
+});
+
+describe("shouldRemoveReviewItemAfterDecision", () => {
+  it("keeps needs-more-info review work visible because it is still open", () => {
+    expect(shouldRemoveReviewItemAfterDecision("NEEDS_MORE_INFO")).toBe(false);
+  });
+
+  it.each(["APPROVE", "EDIT_AND_APPROVE", "REJECT", "MARK_DUPLICATE", "MARK_UNPROCESSABLE"])(
+    "removes terminal review decision %s from the local queue",
+    (decision) => {
+      expect(shouldRemoveReviewItemAfterDecision(decision)).toBe(true);
+    }
+  );
 });
 
 const reviewItem = {
