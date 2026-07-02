@@ -36,6 +36,18 @@ describe("apiErrorDetail", () => {
     ).toBe("This review item is already approved.");
   });
 
+  it("formats direct approval conflicts with missing fields and structural reasons", () => {
+    expect(
+      apiErrorDetail({
+        error: "REVIEW_APPROVAL_REQUIRES_EDIT",
+        missingFields: ["cleanedQuestionText", "answerText", "marks"],
+        blockingReasons: ["MCQ_OPTIONS_MISSING"]
+      })
+    ).toBe(
+      "Approve as-is needs a complete candidate. Use Save edits after fixing question text, answer text, and marks. Resolve MCQ options missing before approving."
+    );
+  });
+
   it("falls back to response messages and humanized error codes", () => {
     expect(apiErrorDetail({ message: "Missing required environment variable: R2_ACCOUNT_ID" })).toBe(
       "Missing required environment variable: R2_ACCOUNT_ID"

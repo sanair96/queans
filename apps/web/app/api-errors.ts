@@ -5,6 +5,8 @@ interface ApiErrorBody {
   expectedMimeType?: unknown;
   actualMimeType?: unknown;
   status?: unknown;
+  missingFields?: unknown;
+  blockingReasons?: unknown;
 }
 
 export async function assertOk(response: Response, action: string) {
@@ -47,8 +49,24 @@ export function apiErrorDetail(body: ApiErrorBody) {
     return status ? `This review item is already ${status.toLowerCase().replaceAll("_", " ")}.` : "This review item is already closed.";
   }
 
+  if (errorCode === "REVIEW_APPROVAL_REQUIRES_EDIT") {
+    return reviewApprovalRequiresEditDetail(body);
+  }
+
   const message = stringValue(body.message);
   return message ?? (errorCode ? humanizeErrorCode(errorCode) : undefined);
+}
+
+function reviewApprovalRequiresEditDetail(body: ApiErrorBody) {
+  const missingFields = stringList(body.missingFields).map(reviewFieldLabel);
+  const blockingReasons = stringList(body.blockingReasons).map(reviewReasonLabel);
+  const detailParts = [
+    "Approve as-is needs a complete candidate.",
+    missingFields.length > 0 ? `Use Save edits after fixing ${listLabel(missingFields)}.` : undefined,
+    blockingReasons.length > 0 ? `Resolve ${listLabel(blockingReasons)} before approving.` : undefined
+  ].filter((part): part is string => part !== undefined);
+
+  return detailParts.length > 1 ? detailParts.join(" ") : stringValue(body.message) ?? detailParts[0];
 }
 
 async function readApiErrorBody(response: Response) {
@@ -134,6 +152,44 @@ function issuePathLabel(path: unknown) {
   }
 
   return parts.join(".");
+}
+
+function stringList(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function listLabel(values: string[]) {
+  if (values.length <= 1) {
+    return values[0] ?? "";
+  }
+
+  if (values.length === 2) {
+    return `${values[0]} and ${values[1]}`;
+  }
+
+  return `${values.slice(0, -1).join(", ")}, and ${values[values.length - 1]}`;
+}
+
+function reviewFieldLabel(value: string) {
+  switch (value) {
+    case "cleanedQuestionText":
+      return "question text";
+    case "answerText":
+      return "answer text";
+    case "questionType":
+      return "question type";
+    default:
+      return value;
+  }
+}
+
+function reviewReasonLabel(value: string) {
+  const label = humanizeErrorCode(value).replace(/^Mcq /, "MCQ ");
+  return label.startsWith("MCQ ") ? `MCQ ${label.slice(4).toLowerCase()}` : label.toLowerCase();
 }
 
 function mimeTypeLabel(value: unknown) {
