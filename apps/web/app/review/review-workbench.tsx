@@ -348,7 +348,7 @@ function correction(fieldName: string, oldValue: string, newValue: string, corre
 function parseMarksDraft(value: string) {
   const trimmed = value.trim();
   if (!trimmed) {
-    return null;
+    throw new Error("Marks are required for edited approvals.");
   }
 
   const marks = Number(trimmed);

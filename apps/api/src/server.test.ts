@@ -147,7 +147,8 @@ describe("buildServer", () => {
             candidate: {
               cleanedQuestionText: "",
               questionType: "SHORT_ANSWER",
-              answerText: "Valid answer"
+              answerText: "Valid answer",
+              marks: 2
             }
           }
         }

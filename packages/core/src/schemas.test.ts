@@ -119,7 +119,8 @@ describe("reviewPatchSchema", () => {
           candidate: {
             cleanedQuestionText: " ",
             questionType: "SHORT_ANSWER",
-            answerText: "Valid answer"
+            answerText: "Valid answer",
+            marks: 2
           }
         }
       })
@@ -132,7 +133,8 @@ describe("reviewPatchSchema", () => {
           candidate: {
             cleanedQuestionText: "Valid question",
             questionType: "SHORT_ANSWER",
-            answerText: ""
+            answerText: "",
+            marks: 2
           }
         }
       })
@@ -147,11 +149,28 @@ describe("reviewPatchSchema", () => {
           candidate: {
             cleanedQuestionText: "Valid question",
             questionType: "UNKNOWN",
-            answerText: "Valid answer"
+            answerText: "Valid answer",
+            marks: 2
           }
         }
       })
     ).toThrow("Question type is required for edit approval.");
+  });
+
+  it("rejects edit approval without resolved marks", () => {
+    expect(() =>
+      reviewPatchSchema.parse({
+        decision: "EDIT_AND_APPROVE",
+        reviewPayload: {
+          candidate: {
+            cleanedQuestionText: "Valid question",
+            questionType: "SHORT_ANSWER",
+            answerText: "Valid answer",
+            marks: null
+          }
+        }
+      })
+    ).toThrow("Marks are required for edit approval.");
   });
 
   it("does not require edit payloads for non-edit decisions", () => {

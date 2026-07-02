@@ -73,7 +73,7 @@ describe("candidateUpdateForReviewedItem", () => {
           questionType: "SHORT_ANSWER",
           answerText: "  The tendency to resist a change in motion.  ",
           solutionText: "   ",
-          marks: null,
+          marks: 2,
           difficulty: "  easy  "
         }
       })
@@ -82,7 +82,7 @@ describe("candidateUpdateForReviewedItem", () => {
       questionType: "SHORT_ANSWER",
       answerText: "The tendency to resist a change in motion.",
       solutionText: null,
-      marks: null,
+      marks: 2,
       difficulty: "easy",
       reviewStatus: "EDITED_AND_APPROVED",
       answerSourceType: "HUMAN_VERIFIED",

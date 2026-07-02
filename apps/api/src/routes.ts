@@ -334,6 +334,13 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
       }
     }
 
+    if (input.decision === "EDIT_AND_APPROVE") {
+      const editApprovalConflict = reviewEditApprovalConflictPayload(reviewItem);
+      if (editApprovalConflict) {
+        return reply.code(409).send(editApprovalConflict);
+      }
+    }
+
     try {
       await prisma.$transaction(async (tx) => {
         const updateResult = await tx.reviewItem.updateMany({
@@ -616,6 +623,7 @@ const directApprovalBlockingReasonCodes = new Set<ReviewReasonCode>([
   "MCQ_CORRECT_ANSWER_MISSING",
   "DIAGRAM_ASSET_MISSING"
 ]);
+const editApprovalUnsupportedReasonCodes = new Set<ReviewReasonCode>(["MCQ_OPTIONS_MISSING", "DIAGRAM_ASSET_MISSING"]);
 
 const mutableReviewStatuses = [ReviewStatus.OPEN, ReviewStatus.ASSIGNED] as const;
 
@@ -656,6 +664,23 @@ export function reviewApprovalConflictPayload(reviewItem: ReviewItemApprovalStat
     message:
       "Direct approval can only ingest complete candidates as-is. Edit and approve, reject, mark duplicate, request more info, or mark this review item unprocessable.",
     missingFields,
+    blockingReasons: [...new Set(blockingReasons)]
+  };
+}
+
+export function reviewEditApprovalConflictPayload(reviewItem: Pick<ReviewItemApprovalState, "reasonCodes">) {
+  const blockingReasons = reviewReasonCodesFromJson(reviewItem.reasonCodes).filter((reason) =>
+    editApprovalUnsupportedReasonCodes.has(reason)
+  );
+
+  if (blockingReasons.length === 0) {
+    return undefined;
+  }
+
+  return {
+    error: "REVIEW_EDIT_APPROVAL_REQUIRES_STRUCTURAL_FIX",
+    message:
+      "Save edits cannot resolve this review item's structural requirements yet. Use another review decision or add structural editor support before approving.",
     blockingReasons: [...new Set(blockingReasons)]
   };
 }

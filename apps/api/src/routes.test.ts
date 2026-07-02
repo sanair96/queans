@@ -13,6 +13,7 @@ import {
   mutableReviewItemWhere,
   openReviewItemsWhere,
   reviewApprovalConflictPayload,
+  reviewEditApprovalConflictPayload,
   reviewItemAlreadyClosedPayload,
   reviewReasonCodesFromJson,
   reviewSignalRunForItem,
@@ -404,6 +405,29 @@ describe("reviewReasonCodesFromJson", () => {
 
   it("returns an empty list for non-array reason payloads", () => {
     expect(reviewReasonCodesFromJson(null)).toEqual([]);
+  });
+});
+
+describe("reviewEditApprovalConflictPayload", () => {
+  it("blocks edited approval for structural reasons the edit form cannot resolve", () => {
+    expect(
+      reviewEditApprovalConflictPayload({
+        reasonCodes: ["MCQ_OPTIONS_MISSING", "DIAGRAM_ASSET_MISSING", "MISSING_MARKS"]
+      })
+    ).toEqual({
+      error: "REVIEW_EDIT_APPROVAL_REQUIRES_STRUCTURAL_FIX",
+      message:
+        "Save edits cannot resolve this review item's structural requirements yet. Use another review decision or add structural editor support before approving.",
+      blockingReasons: ["MCQ_OPTIONS_MISSING", "DIAGRAM_ASSET_MISSING"]
+    });
+  });
+
+  it("allows edited approval when schema-backed fields can resolve the review reasons", () => {
+    expect(
+      reviewEditApprovalConflictPayload({
+        reasonCodes: ["MISSING_REQUIRED_FIELD", "MISSING_MARKS", "LOW_FIELD_CONFIDENCE"]
+      })
+    ).toBeUndefined();
   });
 });
 

@@ -48,6 +48,17 @@ describe("apiErrorDetail", () => {
     );
   });
 
+  it("formats edited approval conflicts for unsupported structural fixes", () => {
+    expect(
+      apiErrorDetail({
+        error: "REVIEW_EDIT_APPROVAL_REQUIRES_STRUCTURAL_FIX",
+        blockingReasons: ["MCQ_OPTIONS_MISSING", "DIAGRAM_ASSET_MISSING"]
+      })
+    ).toBe(
+      "Save edits cannot approve this item yet. Resolve MCQ options missing and diagram asset missing before approving. Use another review decision until this structural editor is available."
+    );
+  });
+
   it("falls back to response messages and humanized error codes", () => {
     expect(apiErrorDetail({ message: "Missing required environment variable: R2_ACCOUNT_ID" })).toBe(
       "Missing required environment variable: R2_ACCOUNT_ID"

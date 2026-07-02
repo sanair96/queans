@@ -53,6 +53,10 @@ export function apiErrorDetail(body: ApiErrorBody) {
     return reviewApprovalRequiresEditDetail(body);
   }
 
+  if (errorCode === "REVIEW_EDIT_APPROVAL_REQUIRES_STRUCTURAL_FIX") {
+    return reviewEditApprovalRequiresStructuralFixDetail(body);
+  }
+
   const message = stringValue(body.message);
   return message ?? (errorCode ? humanizeErrorCode(errorCode) : undefined);
 }
@@ -67,6 +71,13 @@ function reviewApprovalRequiresEditDetail(body: ApiErrorBody) {
   ].filter((part): part is string => part !== undefined);
 
   return detailParts.length > 1 ? detailParts.join(" ") : stringValue(body.message) ?? detailParts[0];
+}
+
+function reviewEditApprovalRequiresStructuralFixDetail(body: ApiErrorBody) {
+  const blockingReasons = stringList(body.blockingReasons).map(reviewReasonLabel);
+  const reasonDetail =
+    blockingReasons.length > 0 ? ` Resolve ${listLabel(blockingReasons)} before approving.` : "";
+  return `Save edits cannot approve this item yet.${reasonDetail} Use another review decision until this structural editor is available.`;
 }
 
 async function readApiErrorBody(response: Response) {

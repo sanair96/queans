@@ -56,7 +56,12 @@ const editAndApprovePayloadSchema = z.object({
     questionType: reviewedQuestionTypeSchema,
     answerText: z.string().trim().min(1, "Answer text is required for edit approval."),
     solutionText: z.string().optional(),
-    marks: z.number().nonnegative().nullable().optional(),
+    marks: z
+      .number({
+        required_error: "Marks are required for edit approval.",
+        invalid_type_error: "Marks are required for edit approval."
+      })
+      .nonnegative("Marks must be a non-negative number."),
     difficulty: z.string().optional()
   })
 });
