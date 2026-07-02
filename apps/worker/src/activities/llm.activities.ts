@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { PaperIngestionWorkflowInput } from "@queans/core";
 import { CandidateStatus, prisma, Prisma, QuestionType, ReviewReason } from "@queans/db";
-import { loadMistralConfigFromEnv, MistralQuestionExtractor } from "@queans/providers";
+import { createQuestionExtractorFromEnv } from "@queans/providers";
 import type { ExtractedQuestionCandidate } from "@queans/providers";
 
 import { toInputJson } from "../json.js";
@@ -19,7 +19,7 @@ export async function extractQuestionsAndPersist(input: PaperIngestionWorkflowIn
     throw new Error(`No OCR pages found for source paper ${input.sourcePaperId}`);
   }
 
-  const extractor = new MistralQuestionExtractor(loadMistralConfigFromEnv(process.env));
+  const extractor = createQuestionExtractorFromEnv(process.env);
   const extraction = await extractor.extractFromPages(
     pages.map((page) => ({
       pageNumber: page.pageNumber,

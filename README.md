@@ -64,6 +64,8 @@ Provider pricing changes over time. The worker records `provider_run_costs.estim
 - `MISTRAL_EXTRACTOR_INPUT_USD_PER_MILLION_TOKENS=0.15`
 - `MISTRAL_EXTRACTOR_OUTPUT_USD_PER_MILLION_TOKENS=0.60`
 
+`LLM_PROVIDER=mistral` is the only supported extractor provider today. Use `EXTRACTOR_MODEL` to choose the cheapest acceptable Mistral extraction model for your quality bar.
+
 Optional Google Document AI benchmarking needs:
 
 - `DOCUMENT_AI_ENABLED=true`
