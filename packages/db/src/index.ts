@@ -1,3 +1,5 @@
+import "./load-env.js";
+
 import { PrismaClient } from "@prisma/client";
 
 const globalForPrisma = globalThis as typeof globalThis & {
@@ -15,4 +17,3 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 export * from "@prisma/client";
-

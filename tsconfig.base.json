@@ -8,7 +8,8 @@
     "paths": {
       "@queans/core": ["packages/core/src/index.ts"],
       "@queans/providers": ["packages/providers/src/index.ts"],
-      "@queans/db": ["packages/db/src/index.ts"]
+      "@queans/db": ["packages/db/src/index.ts"],
+      "@queans/db/load-env": ["packages/db/src/load-env.ts"]
     },
     "strict": true,
     "noUncheckedIndexedAccess": true,

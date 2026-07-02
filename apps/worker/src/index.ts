@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "@queans/db/load-env";
 
 import { NativeConnection, Worker } from "@temporalio/worker";
 

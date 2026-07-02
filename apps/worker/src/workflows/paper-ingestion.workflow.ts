@@ -12,7 +12,7 @@ import {
 import type * as appActivities from "../activities/app.activities.js";
 import type * as llmActivities from "../activities/llm.activities.js";
 import type * as ocrActivities from "../activities/ocr.activities.js";
-import { shouldWaitForHumanReviewSignal } from "./review-wait.js";
+import { humanReviewRecheckInterval, shouldWaitForHumanReviewSignal } from "./review-wait.js";
 
 const app = proxyActivities<typeof appActivities>({
   startToCloseTimeout: "1 minute",
@@ -47,6 +47,19 @@ export async function PaperIngestionWorkflow(input: PaperIngestionWorkflowInput)
   });
 
   try {
+    async function applyReviewedItemsIfAny() {
+      const hasReviewedItems = await app.hasReviewedItemsToApply(input);
+      if (!hasReviewedItems) {
+        return;
+      }
+
+      currentStep = "apply_human_corrections";
+      await app.recordStepStarted(input, "apply_human_corrections");
+      const applySummary = await app.applyReviewedItems(input);
+      await app.recordStepSucceeded(input, "apply_human_corrections", applySummary);
+      currentStep = "wait_for_review";
+    }
+
     currentStep = "store_file";
     await app.recordStepStarted(input, "store_file");
     await app.recordStepSucceeded(input, "store_file", { sourcePaperId: input.sourcePaperId });
@@ -74,22 +87,28 @@ export async function PaperIngestionWorkflow(input: PaperIngestionWorkflowInput)
     while (await app.hasOpenReviewItems(input)) {
       currentStep = "wait_for_review";
       await app.markWaitingForReview(input);
-      const previousSignalCount = reviewSignalCount;
-      const reviewStillOpen = await app.hasOpenReviewItems(input);
-      if (
-        shouldWaitForHumanReviewSignal({
-          reviewStillOpen,
-          previousSignalCount,
-          currentSignalCount: reviewSignalCount
-        })
-      ) {
-        await condition(() => reviewSignalCount > previousSignalCount);
+
+      while (true) {
+        const previousSignalCount = reviewSignalCount;
+        const reviewStillOpen = await app.hasOpenReviewItems(input);
+        if (!reviewStillOpen) {
+          break;
+        }
+
+        if (
+          shouldWaitForHumanReviewSignal({
+            reviewStillOpen,
+            previousSignalCount,
+            currentSignalCount: reviewSignalCount
+          })
+        ) {
+          await condition(() => reviewSignalCount > previousSignalCount, humanReviewRecheckInterval);
+        }
+
+        await applyReviewedItemsIfAny();
       }
-      currentStep = "apply_human_corrections";
-      await app.recordStepStarted(input, "apply_human_corrections");
-      await app.applyReviewedItems(input);
-      await app.recordStepSucceeded(input, "apply_human_corrections", {});
     }
+    await applyReviewedItemsIfAny();
 
     currentStep = "commit_to_question_bank";
     await app.recordStepStarted(input, "commit_to_question_bank");

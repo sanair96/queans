@@ -5,6 +5,7 @@ import { CandidateStatus, ReviewStatus } from "@queans/db";
 import {
   answerReviewStatusForCandidate,
   candidateUpdateForReviewedItem,
+  reviewedItemToApplyWhere,
   reviewGateForConfidenceDecision,
   workflowCompletionPayload
 } from "./app.activities.js";
@@ -84,6 +85,18 @@ describe("candidateUpdateForReviewedItem", () => {
       reviewStatus: "EDITED_AND_APPROVED",
       answerSourceType: "HUMAN_VERIFIED",
       answerSourceBacked: true
+    });
+  });
+});
+
+describe("reviewedItemToApplyWhere", () => {
+  it("selects only terminal, unapplied review items for workflow application", () => {
+    expect(reviewedItemToApplyWhere("source-paper-1")).toEqual({
+      sourcePaperId: "source-paper-1",
+      status: {
+        in: [ReviewStatus.APPROVED, ReviewStatus.EDITED, ReviewStatus.REJECTED, ReviewStatus.SKIPPED]
+      },
+      appliedAt: null
     });
   });
 });

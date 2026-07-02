@@ -44,9 +44,6 @@ importers:
       '@temporalio/client':
         specifier: ^1.12.1
         version: 1.18.1
-      dotenv:
-        specifier: ^17.4.2
-        version: 17.4.2
       fastify:
         specifier: ^5.2.1
         version: 5.9.0
@@ -109,9 +106,6 @@ importers:
       '@temporalio/workflow':
         specifier: ^1.12.1
         version: 1.18.1
-      dotenv:
-        specifier: ^17.4.2
-        version: 17.4.2
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -138,10 +132,16 @@ importers:
       '@prisma/client':
         specifier: ^6.19.2
         version: 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
+      dotenv:
+        specifier: ^17.4.2
+        version: 17.4.2
     devDependencies:
       prisma:
         specifier: ^6.19.2
         version: 6.19.3(typescript@5.9.3)
+      tsx:
+        specifier: ^4.22.4
+        version: 4.22.4
 
   packages/providers:
     dependencies:

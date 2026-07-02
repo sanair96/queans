@@ -5,18 +5,30 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./load-env": {
+      "types": "./dist/load-env.d.ts",
+      "default": "./dist/load-env.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "db:generate": "prisma generate --schema prisma/schema.prisma",
-    "db:migrate": "prisma migrate dev --schema prisma/schema.prisma",
+    "db:generate": "tsx src/run-prisma.ts generate --schema prisma/schema.prisma",
+    "db:migrate": "tsx src/run-prisma.ts migrate dev --schema prisma/schema.prisma",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@prisma/client": "^6.19.2"
+    "@prisma/client": "^6.19.2",
+    "dotenv": "^17.4.2"
   },
   "devDependencies": {
-    "prisma": "^6.19.2"
+    "prisma": "^6.19.2",
+    "tsx": "^4.22.4"
   }
 }

@@ -373,11 +373,7 @@ export async function markWaitingForReview(input: PaperIngestionWorkflowInput) {
 
 export async function applyReviewedItems(input: PaperIngestionWorkflowInput) {
   const reviewedItems = await prisma.reviewItem.findMany({
-    where: {
-      sourcePaperId: input.sourcePaperId,
-      status: { in: ["APPROVED", "EDITED", "REJECTED", "SKIPPED"] },
-      appliedAt: null
-    }
+    where: reviewedItemToApplyWhere(input.sourcePaperId)
   });
 
   for (const item of reviewedItems) {
@@ -394,6 +390,23 @@ export async function applyReviewedItems(input: PaperIngestionWorkflowInput) {
   }
 
   return { reviewedItemsApplied: reviewedItems.length };
+}
+
+export async function hasReviewedItemsToApply(input: PaperIngestionWorkflowInput) {
+  const count = await prisma.reviewItem.count({
+    where: reviewedItemToApplyWhere(input.sourcePaperId)
+  });
+  return count > 0;
+}
+
+const reviewedItemApplyStatuses = [ReviewStatus.APPROVED, ReviewStatus.EDITED, ReviewStatus.REJECTED, ReviewStatus.SKIPPED] as const;
+
+export function reviewedItemToApplyWhere(sourcePaperId: string) {
+  return {
+    sourcePaperId,
+    status: { in: [...reviewedItemApplyStatuses] },
+    appliedAt: null
+  } satisfies Prisma.ReviewItemWhereInput;
 }
 
 export async function commitApprovedCandidates(input: PaperIngestionWorkflowInput) {

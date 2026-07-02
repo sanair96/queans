@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "@queans/db/load-env";
 
 import { loadConfig } from "./config.js";
 import { startOutboxDispatcher } from "./outbox.js";

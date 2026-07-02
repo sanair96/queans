@@ -51,7 +51,7 @@ Leave `R2_ENDPOINT` empty for the standard Cloudflare R2 endpoint; the provider 
 
 Uploads are limited to PDFs of 50 MB or smaller because the current OCR activity uses Mistral's URL-based PDF OCR path.
 
-The API and worker load `.env` automatically in local development. Shell-provided values still override `.env`, which is useful when running the Docker database on a non-default host port.
+The API and worker load `.env` automatically in local development. The shared DB package resolves the workspace root `.env` before Prisma initializes, so package-scoped commands from `apps/api`, `apps/worker`, or `packages/db` use the same database URL. Shell-provided values still override `.env`, which is useful when running the Docker database on a non-default host port.
 
 Provider pricing changes over time. The worker records `provider_run_costs.estimated_cost_usd` from these editable defaults:
 

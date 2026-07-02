@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { shouldWaitForHumanReviewSignal } from "./review-wait.js";
+import { humanReviewRecheckInterval, shouldWaitForHumanReviewSignal } from "./review-wait.js";
 
 describe("shouldWaitForHumanReviewSignal", () => {
+  it("uses a bounded wait so lost review signals cannot strand the workflow indefinitely", () => {
+    expect(humanReviewRecheckInterval).toBe("1 minute");
+  });
+
   it("does not wait when review items were cleared before entering the condition", () => {
     expect(
       shouldWaitForHumanReviewSignal({
