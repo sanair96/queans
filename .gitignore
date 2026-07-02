@@ -6,6 +6,7 @@ node_modules
 .next
 dist
 coverage
+.playwright-cli
 *.tsbuildinfo
 
 .DS_Store

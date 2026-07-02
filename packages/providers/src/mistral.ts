@@ -165,7 +165,7 @@ export class MistralQuestionExtractor {
 }
 
 export function parseMistralExtractionContent(content: string): ExtractedQuestionCandidate[] {
-  const extracted = extractionResponseSchema.parse(JSON.parse(content));
+  const extracted = parseExtractionResponse(content);
   return extracted.candidates.map((candidate) => ({
     questionNumber: candidate.question_number,
     sectionName: candidate.section_name,
@@ -193,6 +193,16 @@ export function parseMistralExtractionContent(content: string): ExtractedQuestio
     validationErrors: candidate.validation_errors.filter(isKnownReviewReason),
     sourceEvidence: candidate.source_evidence
   }));
+}
+
+function parseExtractionResponse(content: string) {
+  try {
+    return extractionResponseSchema.parse(JSON.parse(content));
+  } catch (error) {
+    throw new Error("Mistral extraction response did not match the required candidate schema.", {
+      cause: error
+    });
+  }
 }
 
 function normalizeMistralPage(page: z.infer<typeof mistralOcrPageSchema>): OcrPage {

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Search } from "lucide-react";
+import { AlertTriangle, Search } from "lucide-react";
 
 import { assertOk } from "../api-errors";
 
@@ -15,6 +15,7 @@ interface IngestionRun {
   sourcePaperId: string | null;
   outputPayload: unknown;
   errorPayload: unknown;
+  failureSummary?: WorkflowFailureSummary | null;
   counts?: {
     questionCandidates: number;
     reviewItems: number;
@@ -46,6 +47,32 @@ interface IngestionRun {
     outputTokenCount: number | null;
     estimatedCostUsd: string | null;
   }>;
+}
+
+interface WorkflowFailureSummary {
+  title: string;
+  detail: string;
+  failedStep?: string;
+  failureType?: string;
+  rootCause: string;
+  provider?: string;
+  model?: string;
+  issues: WorkflowFailureIssue[];
+}
+
+interface WorkflowFailureIssue {
+  path: Array<string | number>;
+  field: string;
+  message: string;
+  code?: string;
+  expected?: string;
+  received?: string;
+  candidateIndex?: number;
+}
+
+interface FailureDiagnosisProps {
+  summary: WorkflowFailureSummary;
+  payload: unknown;
 }
 
 export function RunLookup() {
@@ -85,6 +112,8 @@ export function RunLookup() {
     }
   }
 
+  const failureSummary = run ? failureSummaryForRun(run) : null;
+
   return (
     <section className="run-lookup">
       <div className="panel flat">
@@ -100,6 +129,8 @@ export function RunLookup() {
 
       {run ? (
         <>
+          {failureSummary ? <FailureDiagnosis summary={failureSummary} payload={run.errorPayload} /> : null}
+
           <section className="panel run-summary">
             <div>
               <p className="eyebrow">Status</p>
@@ -127,13 +158,16 @@ export function RunLookup() {
               <h2>Steps</h2>
               <div className="step-list">
                 {run.steps.map((step) => (
-                  <div className="step-row" key={step.id}>
+                  <div className={`step-row ${step.status.toLowerCase()}`} key={step.id}>
                     <span className={`step-dot ${step.status.toLowerCase()}`} />
                     <div>
                       <strong>{step.stepName}</strong>
                       <span className="muted">
                         {step.status} · attempt {step.attemptCount}
                       </span>
+                      {step.status === "FAILED" && failureSummary?.failedStep === step.stepName ? (
+                        <span className="step-error">{failureSummary.detail}</span>
+                      ) : null}
                     </div>
                   </div>
                 ))}
@@ -158,10 +192,10 @@ export function RunLookup() {
             </section>
           </div>
 
-          {hasPayload(run.outputPayload) || hasPayload(run.errorPayload) ? (
+          {hasPayload(run.outputPayload) && !hasPayload(run.errorPayload) ? (
             <section className="panel">
-              <h2>{hasPayload(run.errorPayload) ? "Failure output" : "Run output"}</h2>
-              <pre className="json-block">{stableJson(hasPayload(run.errorPayload) ? run.errorPayload : run.outputPayload)}</pre>
+              <h2>Run output</h2>
+              <pre className="json-block">{stableJson(run.outputPayload)}</pre>
             </section>
           ) : null}
 
@@ -205,10 +239,125 @@ export function RunLookup() {
   );
 }
 
+export function FailureDiagnosis({ summary, payload }: FailureDiagnosisProps) {
+  const issueGroups = groupedFailureIssues(summary);
+  const nextAction = nextActionForFailure(summary);
+
+  return (
+    <section className="failure-panel" aria-label="Run failure diagnosis">
+      <div className="failure-heading">
+        <div className="failure-icon">
+          <AlertTriangle size={20} aria-hidden="true" />
+        </div>
+        <div>
+          <p className="eyebrow">Failure diagnosis</p>
+          <h2>{summary.title}</h2>
+          <p>{summary.detail}</p>
+        </div>
+      </div>
+
+      <dl className="failure-facts">
+        {summary.failedStep ? (
+          <div>
+            <dt>Failed at</dt>
+            <dd>{summary.failedStep}</dd>
+          </div>
+        ) : null}
+        {summary.failureType ? (
+          <div>
+            <dt>Failure type</dt>
+            <dd>{summary.failureType}</dd>
+          </div>
+        ) : null}
+        {summary.provider ? (
+          <div>
+            <dt>Provider</dt>
+            <dd>{summary.provider}</dd>
+          </div>
+        ) : null}
+        {summary.model ? (
+          <div>
+            <dt>Model</dt>
+            <dd>{summary.model}</dd>
+          </div>
+        ) : null}
+      </dl>
+
+      {nextAction ? <p className="failure-next">{nextAction}</p> : null}
+
+      {issueGroups.length > 0 ? (
+        <div className="failure-issues">
+          <h3>Invalid fields</h3>
+          <div className="failure-issue-groups">
+            {issueGroups.map((group) => (
+              <article className="failure-issue-group" key={group.key}>
+                <h4>{group.label}</h4>
+                <ul>
+                  {group.issues.map((issue) => (
+                    <li key={`${group.key}:${issue.path.join(".")}`}>
+                      <code>{issue.field}</code>
+                      <span>{issueDetail(issue)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <details className="technical-details">
+        <summary>Technical details</summary>
+        <pre className="json-block">{stableJson(payload)}</pre>
+      </details>
+    </section>
+  );
+}
+
 function stableJson(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
 
 function hasPayload(value: unknown) {
   return value !== null && value !== undefined;
+}
+
+function failureSummaryForRun(run: IngestionRun) {
+  if (!hasPayload(run.errorPayload)) {
+    return null;
+  }
+
+  return run.failureSummary ?? null;
+}
+
+function groupedFailureIssues(summary: WorkflowFailureSummary) {
+  const groups = new Map<string, WorkflowFailureSummary["issues"]>();
+  for (const issue of summary.issues) {
+    const key = issue.candidateIndex === undefined ? "run" : `candidate-${issue.candidateIndex}`;
+    groups.set(key, [...(groups.get(key) ?? []), issue]);
+  }
+
+  return [...groups.entries()].map(([key, issues]) => ({
+    key,
+    label: key === "run" ? "Run payload" : `Candidate ${Number(key.replace("candidate-", "")) + 1}`,
+    issues
+  }));
+}
+
+function nextActionForFailure(summary: WorkflowFailureSummary) {
+  if (summary.failedStep === "extract_question_candidates" && summary.issues.length > 0) {
+    return "OCR completed; extraction response did not match the required candidate schema.";
+  }
+
+  return undefined;
+}
+
+function issueDetail(issue: WorkflowFailureSummary["issues"][number]) {
+  if (issue.message !== "Required") {
+    return issue.message.endsWith(".") ? issue.message : `${issue.message}.`;
+  }
+
+  const expected = issue.expected ? ` Expected ${issue.expected}.` : "";
+  const received = issue.received ? ` Received ${issue.received}.` : "";
+  return `${issue.message}.${expected}${received}`;
 }

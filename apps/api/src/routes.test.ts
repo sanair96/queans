@@ -4,6 +4,7 @@ import { Prisma, ReviewStatus } from "@queans/db";
 
 import {
   canPatchReviewItem,
+  ingestionFailureSummary,
   ingestionQueuedPayload,
   isActiveIngestionStatus,
   isPrismaUniqueConstraintError,
@@ -172,6 +173,76 @@ describe("ingestionQueuedPayload", () => {
     expect(ingestionQueuedPayload({ id: "run-1", status: "WAITING_FOR_REVIEW" })).toEqual({
       ingestionRunId: "run-1",
       status: "WAITING_FOR_REVIEW"
+    });
+  });
+});
+
+describe("ingestionFailureSummary", () => {
+  it("summarizes extraction schema failures and attaches matching provider cost metadata", () => {
+    expect(
+      ingestionFailureSummary({
+        currentStep: "extract_question_candidates",
+        errorPayload: {
+          name: "ApplicationFailure",
+          message: "Mistral extraction response did not match the required candidate schema.",
+          cause: {
+            name: "ZodError",
+            message: "ZodError",
+            stack: `ZodError: [
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "candidates",
+      0,
+      "cleaned_question_text"
+    ],
+    "message": "Required"
+  }
+]`
+          }
+        },
+        providerRunCosts: [
+          { provider: "MISTRAL", model: "mistral-ocr-latest", operation: "ocr" },
+          { provider: "MISTRAL", model: "mistral-small-latest", operation: "question_extraction" }
+        ]
+      })
+    ).toMatchObject({
+      title: "Question extraction returned malformed candidates",
+      detail: "Question extraction returned malformed candidates: 1 candidate is missing required fields.",
+      failedStep: "extract_question_candidates",
+      failureType: "ZodError",
+      rootCause: "ZodError",
+      provider: "MISTRAL",
+      model: "mistral-small-latest",
+      issues: [
+        {
+          field: "cleaned_question_text",
+          candidateIndex: 0
+        }
+      ]
+    });
+  });
+
+  it("returns null for runs without an error payload", () => {
+    expect(ingestionFailureSummary({ errorPayload: null })).toBeNull();
+  });
+
+  it("does not attach OCR provider metadata to extraction failures", () => {
+    const summary = ingestionFailureSummary({
+      currentStep: "extract_question_candidates",
+      errorPayload: { name: "Error", message: "Invalid extraction response" },
+      providerRunCosts: [{ provider: "MISTRAL", model: "mistral-ocr-latest", operation: "ocr" }]
+    });
+
+    expect(summary).toMatchObject({
+      title: "Workflow failed",
+      rootCause: "Invalid extraction response"
+    });
+    expect(summary).not.toMatchObject({
+      provider: "MISTRAL",
+      model: "mistral-ocr-latest"
     });
   });
 });

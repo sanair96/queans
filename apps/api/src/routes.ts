@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type { FastifyInstance, FastifyReply } from "fastify";
 
-import { reviewPatchSchema, uploadCompleteSchema, uploadInitSchema } from "@queans/core";
+import { reviewPatchSchema, summarizeWorkflowFailure, uploadCompleteSchema, uploadInitSchema } from "@queans/core";
 import { Prisma, prisma, ReviewStatus, WorkflowStatus } from "@queans/db";
 import { loadR2ConfigFromEnv, R2ObjectStore, type StoredObjectHead } from "@queans/providers";
 
@@ -230,7 +230,7 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
       include: {
         steps: { orderBy: { startedAt: "asc" } },
         events: { orderBy: { createdAt: "asc" }, take: 50 },
-        providerRunCosts: true,
+        providerRunCosts: { orderBy: { createdAt: "asc" } },
         sourcePaper: {
           include: {
             _count: {
@@ -256,6 +256,11 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
       sourcePaperId: workflowRun.sourcePaperId,
       outputPayload: workflowRun.outputPayload,
       errorPayload: workflowRun.errorPayload,
+      failureSummary: ingestionFailureSummary({
+        errorPayload: workflowRun.errorPayload,
+        currentStep: workflowRun.currentStep,
+        providerRunCosts: workflowRun.providerRunCosts
+      }),
       counts: workflowRun.sourcePaper?._count,
       steps: workflowRun.steps,
       events: workflowRun.events,
@@ -484,6 +489,61 @@ export function ingestionQueuedPayload(workflowRun: { id: string; status: string
     ingestionRunId: workflowRun.id,
     status: workflowRun.status === WorkflowStatus.PENDING ? "QUEUED" : workflowRun.status
   };
+}
+
+export function ingestionFailureSummary(input: {
+  errorPayload: unknown;
+  currentStep?: string | null;
+  providerRunCosts?: Array<{ provider: string; model: string; operation: string }>;
+}) {
+  if (!hasPayload(input.errorPayload)) {
+    return null;
+  }
+
+  const cost = providerCostForStep(input.currentStep, input.providerRunCosts);
+  return summarizeWorkflowFailure(input.errorPayload, ingestionFailureSummaryOptions(input.currentStep, cost));
+}
+
+function ingestionFailureSummaryOptions(
+  failedStep: string | null | undefined,
+  cost: { provider: string; model: string } | undefined
+) {
+  return {
+    ...(failedStep ? { failedStep } : {}),
+    ...(cost ? { provider: cost.provider, model: cost.model } : {})
+  };
+}
+
+function providerCostForStep(
+  stepName: string | null | undefined,
+  providerRunCosts: Array<{ provider: string; model: string; operation: string }> | undefined
+) {
+  if (!providerRunCosts?.length) {
+    return undefined;
+  }
+
+  const operation = stepNameToProviderOperation(stepName);
+  if (operation) {
+    return providerRunCosts.find((cost) => cost.operation === operation);
+  }
+
+  return providerRunCosts.at(-1);
+}
+
+function stepNameToProviderOperation(stepName: string | null | undefined) {
+  if (stepName === "run_ocr") {
+    return "ocr";
+  }
+
+  if (stepName === "extract_question_candidates") {
+    return "question_extraction";
+  }
+
+  return undefined;
+}
+
+function hasPayload(value: unknown) {
+  return value !== null && value !== undefined;
 }
 
 interface ReviewItemMutationState {

@@ -71,4 +71,21 @@ describe("parseMistralExtractionContent", () => {
       subtopic: "Pair of Linear Equations"
     });
   });
+
+  it("fails malformed extraction responses with a readable parser error", () => {
+    expect(() =>
+      parseMistralExtractionContent(
+        JSON.stringify({
+          candidates: [
+            {
+              field_confidence: {},
+              overall_confidence: 0.4,
+              validation_errors: [],
+              source_evidence: {}
+            }
+          ]
+        })
+      )
+    ).toThrow("Mistral extraction response did not match the required candidate schema.");
+  });
 });
