@@ -128,7 +128,7 @@ Default URLs:
 - API: `http://localhost:4000`
 - Temporal UI: `http://localhost:8233`
 
-`GET /health` only checks that the API process is alive. `GET /ready` checks Postgres, Temporal, and the required R2/Mistral configuration; it will return `503` until the upload and OCR credentials are present.
+`GET /health` only checks that the API process is alive. `GET /ready` checks Postgres, Temporal, required R2/Mistral configuration, and the extractor provider setting; it will return `503` until the upload and OCR credentials are present.
 
 ## Ingestion Flow
 

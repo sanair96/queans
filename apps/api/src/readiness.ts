@@ -1,5 +1,5 @@
 import { prisma } from "@queans/db";
-import { loadMistralConfigFromEnv, loadR2ConfigFromEnv } from "@queans/providers";
+import { loadMistralConfigFromEnv, loadQuestionExtractorProviderFromEnv, loadR2ConfigFromEnv } from "@queans/providers";
 
 import type { ApiConfig } from "./config.js";
 import { getTemporalClient } from "./temporal.js";
@@ -62,6 +62,7 @@ export function checkR2ConfigReady() {
 }
 
 export function checkMistralConfigReady() {
+  loadQuestionExtractorProviderFromEnv(process.env);
   loadMistralConfigFromEnv(process.env);
 }
 

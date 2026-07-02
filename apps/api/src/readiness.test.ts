@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { checkReadiness } from "./readiness.js";
+import { checkMistralConfigReady, checkReadiness } from "./readiness.js";
 import type { ApiConfig } from "./config.js";
 
 const apiConfig: ApiConfig = {
@@ -14,6 +14,10 @@ const apiConfig: ApiConfig = {
   TEMPORAL_TASK_QUEUE_OCR: "paper-ocr",
   TEMPORAL_TASK_QUEUE_LLM: "paper-llm-extraction"
 };
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("checkReadiness", () => {
   it("reports ready when database and Temporal checks pass", async () => {
@@ -61,5 +65,21 @@ describe("checkReadiness", () => {
         }
       }
     });
+  });
+});
+
+describe("checkMistralConfigReady", () => {
+  it("rejects unsupported extractor providers before runtime ingestion starts", () => {
+    vi.stubEnv("LLM_PROVIDER", "openai");
+    vi.stubEnv("MISTRAL_API_KEY", "test-key");
+
+    expect(() => checkMistralConfigReady()).toThrow("Unsupported LLM_PROVIDER: openai. Supported providers: mistral");
+  });
+
+  it("accepts the supported Mistral extractor provider", () => {
+    vi.stubEnv("LLM_PROVIDER", "mistral");
+    vi.stubEnv("MISTRAL_API_KEY", "test-key");
+
+    expect(() => checkMistralConfigReady()).not.toThrow();
   });
 });
