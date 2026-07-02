@@ -87,6 +87,30 @@ describe("parseMistralExtractionContent", () => {
     expect(candidate?.validationErrors).toEqual(["VALIDATION_FAILED", "LOW_TOPIC_CONFIDENCE"]);
   });
 
+  it("normalizes out-of-range confidence values to review-blocking failures", () => {
+    const [candidate] = parseMistralExtractionContent(
+      JSON.stringify({
+        candidates: [
+          {
+            ...baseCandidate,
+            field_confidence: {
+              question_text: 95,
+              answer_text: 0.93
+            },
+            overall_confidence: 94
+          }
+        ]
+      })
+    );
+
+    expect(candidate?.fieldConfidence).toEqual({
+      question_text: 0,
+      answer_text: 0.93
+    });
+    expect(candidate?.overallConfidence).toBe(0);
+    expect(candidate?.validationErrors).toEqual(["VALIDATION_FAILED"]);
+  });
+
   it("fails malformed extraction responses with a readable parser error", () => {
     expect(() =>
       parseMistralExtractionContent(
@@ -176,6 +200,16 @@ describe("MistralQuestionExtractor", () => {
     const candidates = asRecord(schemaProperties.candidates);
     const candidateItems = asRecord(candidates.items);
     const candidateProperties = asRecord(candidateItems.properties);
+    const fieldConfidence = asRecord(candidateProperties.field_confidence);
+    const fieldConfidenceValues = asRecord(fieldConfidence.additionalProperties);
+    expect(fieldConfidenceValues).toMatchObject({
+      minimum: 0,
+      maximum: 1
+    });
+    expect(candidateProperties.overall_confidence).toMatchObject({
+      minimum: 0,
+      maximum: 1
+    });
     const validationErrors = asRecord(candidateProperties.validation_errors);
     const validationItems = asRecord(validationErrors.items);
     expect(validationItems.enum).toEqual(expect.arrayContaining(["VALIDATION_FAILED", "LOW_TOPIC_CONFIDENCE"]));

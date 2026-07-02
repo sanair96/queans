@@ -149,9 +149,9 @@ const extractionResponseJsonSchema = {
           diagram_asset: {},
           field_confidence: {
             type: "object",
-            additionalProperties: { type: "number" }
+            additionalProperties: { type: "number", minimum: 0, maximum: 1 }
           },
-          overall_confidence: { type: "number" },
+          overall_confidence: { type: "number", minimum: 0, maximum: 1 },
           validation_errors: {
             type: "array",
             items: { type: "string", enum: [...extractionValidationReasonCodes] }
@@ -256,33 +256,42 @@ export class MistralQuestionExtractor {
 
 export function parseMistralExtractionContent(content: string): ExtractedQuestionCandidate[] {
   const extracted = parseExtractionResponse(content);
-  return extracted.candidates.map((candidate) => ({
-    questionNumber: candidate.question_number,
-    sectionName: candidate.section_name,
-    pageNumber: candidate.page_number,
-    sourcePageStart: candidate.source_page_start,
-    sourcePageEnd: candidate.source_page_end,
-    rawOcrText: candidate.raw_ocr_text,
-    cleanedQuestionText: candidate.cleaned_question_text,
-    questionType: candidate.question_type,
-    marks: candidate.marks,
-    options: candidate.options,
-    answerText: candidate.answer_text,
-    solutionText: candidate.solution_text,
-    answerSourceType: candidate.answer_source_type,
-    answerSourceBacked: candidate.answer_source_backed,
-    chapter: candidate.chapter,
-    topic: candidate.topic,
-    subtopic: candidate.subtopic,
-    difficulty: candidate.difficulty,
-    bloomLevel: candidate.bloom_level,
-    requiresDiagram: candidate.requires_diagram,
-    diagramAsset: candidate.diagram_asset,
-    fieldConfidence: candidate.field_confidence,
-    overallConfidence: candidate.overall_confidence,
-    validationErrors: normalizeValidationErrors(candidate.validation_errors),
-    sourceEvidence: candidate.source_evidence
-  }));
+  return extracted.candidates.map((candidate) => {
+    const invalidConfidence =
+      isOutOfRangeConfidence(candidate.overall_confidence) ||
+      Object.values(candidate.field_confidence).some(isOutOfRangeConfidence);
+
+    return {
+      questionNumber: candidate.question_number,
+      sectionName: candidate.section_name,
+      pageNumber: candidate.page_number,
+      sourcePageStart: candidate.source_page_start,
+      sourcePageEnd: candidate.source_page_end,
+      rawOcrText: candidate.raw_ocr_text,
+      cleanedQuestionText: candidate.cleaned_question_text,
+      questionType: candidate.question_type,
+      marks: candidate.marks,
+      options: candidate.options,
+      answerText: candidate.answer_text,
+      solutionText: candidate.solution_text,
+      answerSourceType: candidate.answer_source_type,
+      answerSourceBacked: candidate.answer_source_backed,
+      chapter: candidate.chapter,
+      topic: candidate.topic,
+      subtopic: candidate.subtopic,
+      difficulty: candidate.difficulty,
+      bloomLevel: candidate.bloom_level,
+      requiresDiagram: candidate.requires_diagram,
+      diagramAsset: candidate.diagram_asset,
+      fieldConfidence: normalizeFieldConfidence(candidate.field_confidence),
+      overallConfidence: normalizeConfidence(candidate.overall_confidence),
+      validationErrors: normalizeValidationErrors([
+        ...candidate.validation_errors,
+        ...(invalidConfidence ? ["VALIDATION_FAILED"] : [])
+      ]),
+      sourceEvidence: candidate.source_evidence
+    };
+  });
 }
 
 function parseExtractionResponse(content: string) {
@@ -360,4 +369,16 @@ function normalizeValidationErrors(reasons: string[]) {
 
 function isKnownReviewReason(reason: string): reason is (typeof extractionValidationReasonCodes)[number] {
   return extractionValidationReasonCodes.some((knownReason) => knownReason === reason);
+}
+
+function normalizeFieldConfidence(confidence: Record<string, number>) {
+  return Object.fromEntries(Object.entries(confidence).map(([fieldName, value]) => [fieldName, normalizeConfidence(value)]));
+}
+
+function normalizeConfidence(value: number) {
+  return isOutOfRangeConfidence(value) ? 0 : value;
+}
+
+function isOutOfRangeConfidence(value: number) {
+  return value < 0 || value > 1;
 }
