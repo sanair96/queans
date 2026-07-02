@@ -118,6 +118,8 @@ Default URLs:
 - API: `http://localhost:4000`
 - Temporal UI: `http://localhost:8233`
 
+`GET /health` only checks that the API process is alive. `GET /ready` checks Postgres, Temporal, and the required R2/Mistral configuration; it will return `503` until the upload and OCR credentials are present.
+
 ## Ingestion Flow
 
 1. `POST /api/uploads/init` creates a pending `upload_objects` row and returns a presigned R2 PUT URL.

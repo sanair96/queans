@@ -20,13 +20,17 @@ describe("checkReadiness", () => {
     await expect(
       checkReadiness(apiConfig, {
         checkDatabase: () => Promise.resolve(),
-        checkTemporal: () => Promise.resolve()
+        checkTemporal: () => Promise.resolve(),
+        checkR2Config: () => Promise.resolve(),
+        checkMistralConfig: () => Promise.resolve()
       })
     ).resolves.toEqual({
       ok: true,
       checks: {
         database: { ok: true },
-        temporal: { ok: true }
+        temporal: { ok: true },
+        r2: { ok: true },
+        mistral: { ok: true }
       }
     });
   });
@@ -35,7 +39,9 @@ describe("checkReadiness", () => {
     await expect(
       checkReadiness(apiConfig, {
         checkDatabase: () => Promise.reject(new Error("database unavailable")),
-        checkTemporal: () => Promise.resolve()
+        checkTemporal: () => Promise.resolve(),
+        checkR2Config: () => Promise.reject(new Error("Missing required environment variable: R2_BUCKET")),
+        checkMistralConfig: () => Promise.reject(new Error("Missing required environment variable: MISTRAL_API_KEY"))
       })
     ).resolves.toEqual({
       ok: false,
@@ -44,7 +50,15 @@ describe("checkReadiness", () => {
           ok: false,
           error: "database unavailable"
         },
-        temporal: { ok: true }
+        temporal: { ok: true },
+        r2: {
+          ok: false,
+          error: "Missing required environment variable: R2_BUCKET"
+        },
+        mistral: {
+          ok: false,
+          error: "Missing required environment variable: MISTRAL_API_KEY"
+        }
       }
     });
   });
