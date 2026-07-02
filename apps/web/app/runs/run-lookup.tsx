@@ -113,6 +113,7 @@ export function RunLookup() {
   }
 
   const failureSummary = run ? failureSummaryForRun(run) : null;
+  const totalEstimatedCost = run ? totalEstimatedCostUsd(run.costs) : null;
 
   return (
     <section className="run-lookup">
@@ -149,6 +150,10 @@ export function RunLookup() {
               <div className="stat">
                 <span>Review</span>
                 <strong>{run.counts?.reviewItems ?? 0}</strong>
+              </div>
+              <div className="stat">
+                <span>Cost</span>
+                <strong>{formatEstimatedCostUsd(totalEstimatedCost)}</strong>
               </div>
             </div>
           </section>
@@ -210,6 +215,7 @@ export function RunLookup() {
                   <th>Pages</th>
                   <th>Input</th>
                   <th>Output</th>
+                  <th>Cost</th>
                 </tr>
               </thead>
               <tbody>
@@ -221,12 +227,23 @@ export function RunLookup() {
                     <td>{cost.pageCount ?? "-"}</td>
                     <td>{cost.inputTokenCount ?? "-"}</td>
                     <td>{cost.outputTokenCount ?? "-"}</td>
+                    <td>{formatEstimatedCostUsd(cost.estimatedCostUsd)}</td>
                   </tr>
                 ))}
                 {run.costs.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="muted">
+                    <td colSpan={7} className="muted">
                       No provider usage recorded.
+                    </td>
+                  </tr>
+                ) : null}
+                {run.costs.length > 0 ? (
+                  <tr>
+                    <td colSpan={6}>
+                      <strong>Total</strong>
+                    </td>
+                    <td>
+                      <strong>{formatEstimatedCostUsd(totalEstimatedCost)}</strong>
                     </td>
                   </tr>
                 ) : null}
@@ -320,6 +337,49 @@ function stableJson(value: unknown) {
 
 function hasPayload(value: unknown) {
   return value !== null && value !== undefined;
+}
+
+export function totalEstimatedCostUsd(costs: Array<{ estimatedCostUsd: string | null }>) {
+  let total = 0;
+  let hasCost = false;
+
+  for (const cost of costs) {
+    const parsed = parseCostUsd(cost.estimatedCostUsd);
+    if (parsed === undefined) {
+      continue;
+    }
+
+    total += parsed;
+    hasCost = true;
+  }
+
+  return hasCost ? total.toFixed(6) : null;
+}
+
+export function formatEstimatedCostUsd(value: string | number | null | undefined) {
+  const parsed = parseCostUsd(value);
+  if (parsed === undefined) {
+    return "-";
+  }
+
+  if (parsed === 0) {
+    return "$0.00";
+  }
+
+  if (parsed < 0.01) {
+    return `<$0.01`;
+  }
+
+  return `$${parsed.toFixed(2)}`;
+}
+
+function parseCostUsd(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === "") {
+    return undefined;
+  }
+
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 function failureSummaryForRun(run: IngestionRun) {

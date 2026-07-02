@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import * as React from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { FailureDiagnosis } from "./run-lookup";
+import { FailureDiagnosis, formatEstimatedCostUsd, totalEstimatedCostUsd } from "./run-lookup";
 
 vi.stubGlobal("React", React);
 
@@ -63,5 +63,28 @@ describe("FailureDiagnosis", () => {
     expect(html).toContain("<summary>Technical details</summary>");
     expect(html.indexOf("Question extraction returned malformed candidates")).toBeLessThan(html.indexOf("Technical details"));
     expect(html).not.toContain("Failure output");
+  });
+});
+
+describe("provider cost helpers", () => {
+  it("sums valid provider cost estimates with fixed precision", () => {
+    expect(
+      totalEstimatedCostUsd([
+        { estimatedCostUsd: "0.004000" },
+        { estimatedCostUsd: "0.000750" },
+        { estimatedCostUsd: null }
+      ])
+    ).toBe("0.004750");
+  });
+
+  it("returns no total when no usable cost estimates exist", () => {
+    expect(totalEstimatedCostUsd([{ estimatedCostUsd: null }, { estimatedCostUsd: "not-a-number" }])).toBeNull();
+  });
+
+  it("formats zero, sub-cent, regular, and missing provider costs", () => {
+    expect(formatEstimatedCostUsd("0.000000")).toBe("$0.00");
+    expect(formatEstimatedCostUsd("0.004750")).toBe("<$0.01");
+    expect(formatEstimatedCostUsd("1.236000")).toBe("$1.24");
+    expect(formatEstimatedCostUsd(null)).toBe("-");
   });
 });
