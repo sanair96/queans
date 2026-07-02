@@ -80,6 +80,68 @@ const extractionResponseSchema = z.object({
   candidates: z.array(extractionCandidateSchema)
 });
 
+const extractionResponseJsonSchema = {
+  title: "QuestionCandidates",
+  type: "object",
+  additionalProperties: false,
+  required: ["candidates"],
+  properties: {
+    candidates: {
+      type: "array",
+      items: {
+        title: "QuestionCandidate",
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "raw_ocr_text",
+          "cleaned_question_text",
+          "question_type",
+          "answer_source_type",
+          "answer_source_backed",
+          "requires_diagram",
+          "field_confidence",
+          "overall_confidence",
+          "validation_errors",
+          "source_evidence"
+        ],
+        properties: {
+          question_number: { type: "string" },
+          section_name: { type: "string" },
+          page_number: { type: "number" },
+          source_page_start: { type: "number" },
+          source_page_end: { type: "number" },
+          raw_ocr_text: { type: "string" },
+          cleaned_question_text: { type: "string" },
+          question_type: { type: "string" },
+          marks: { type: "number" },
+          options: {},
+          answer_text: { type: "string" },
+          solution_text: { type: "string" },
+          answer_source_type: { type: "string", enum: ["SOURCE_KEY", "LLM_GENERATED"] },
+          answer_source_backed: { type: "boolean" },
+          chapter: { type: "string" },
+          topic: { type: "string" },
+          subtopic: { type: "string" },
+          difficulty: { type: "string" },
+          bloom_level: { type: "string" },
+          requires_diagram: { type: "boolean" },
+          diagram_asset: {},
+          field_confidence: {
+            type: "object",
+            additionalProperties: { type: "number" }
+          },
+          overall_confidence: { type: "number" },
+          validation_errors: {
+            type: "array",
+            items: { type: "string" }
+          },
+          source_evidence: {}
+        }
+      }
+    }
+  }
+} as const;
+
 const chatCompletionSchema = z.object({
   choices: z.array(
     z.object({
@@ -132,12 +194,19 @@ export class MistralQuestionExtractor {
     const raw = await callMistral(this.config.apiKey, "/v1/chat/completions", {
       model: this.config.extractorModel,
       temperature: 0,
-      response_format: { type: "json_object" },
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "question_candidates",
+          strict: true,
+          schema: extractionResponseJsonSchema
+        }
+      },
       messages: [
         {
           role: "system",
           content:
-            "Extract question candidates from OCR markdown. Return only JSON matching {\"candidates\": [...]}. Include chapter, topic, subtopic, field_confidence, validation_errors, source_evidence, answer_source_type, answer_source_backed, and whether diagrams are required. Use answer_source_type=SOURCE_KEY only when the answer is directly present in the OCR source; otherwise use LLM_GENERATED and do not hide uncertainty."
+            "Extract question candidates from OCR markdown. Return only JSON matching the provided schema. Use the exact snake_case field names from the schema. field_confidence must be an object keyed by field name with numeric confidence values, not a single number. Include chapter, topic, subtopic, validation_errors, source_evidence, answer_source_type, answer_source_backed, and whether diagrams are required. Use answer_source_type=SOURCE_KEY only when the answer is directly present in the OCR source; otherwise use LLM_GENERATED and do not hide uncertainty."
         },
         {
           role: "user",

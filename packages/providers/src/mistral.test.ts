@@ -89,3 +89,68 @@ describe("parseMistralExtractionContent", () => {
     ).toThrow("Mistral extraction response did not match the required candidate schema.");
   });
 });
+
+describe("MistralQuestionExtractor", () => {
+  it("requests strict JSON schema output for question candidates", async () => {
+    const { MistralQuestionExtractor } = await import("./mistral.js");
+    const fetchCalls: unknown[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (_input, init) => {
+      const body = init?.body;
+      if (typeof body !== "string") {
+        throw new Error("Expected Mistral request body to be serialized JSON.");
+      }
+      fetchCalls.push(JSON.parse(body));
+      const responseBody = JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({ candidates: [] })
+            }
+          }
+        ],
+        usage: {}
+      });
+      return Promise.resolve(
+        new Response(responseBody, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json"
+          }
+        })
+      );
+    };
+
+    try {
+      const extractor = new MistralQuestionExtractor({
+        apiKey: "test-key",
+        ocrModel: "mistral-ocr-latest",
+        extractorModel: "mistral-small-latest"
+      });
+
+      await extractor.extractFromPages([
+        {
+          pageNumber: 1,
+          markdown: "1. What is photosynthesis?",
+          rawJson: {},
+          blocks: []
+        }
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(fetchCalls[0]).toMatchObject({
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "question_candidates",
+          strict: true,
+          schema: {
+            required: ["candidates"]
+          }
+        }
+      }
+    });
+  });
+});
