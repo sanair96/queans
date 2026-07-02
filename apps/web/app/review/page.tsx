@@ -20,6 +20,7 @@ interface ReviewItem {
     cleanedQuestionText: string;
     answerText: string | null;
     options: unknown;
+    diagramAsset: unknown;
     solutionText: string | null;
     difficulty: string | null;
     marks: number | null;

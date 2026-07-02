@@ -26,6 +26,7 @@ interface ReviewItem {
     cleanedQuestionText: string;
     answerText: string | null;
     options: unknown;
+    diagramAsset: unknown;
     solutionText: string | null;
     difficulty: string | null;
     marks: number | null;
@@ -43,6 +44,7 @@ interface ReviewDraft {
   cleanedQuestionText: string;
   questionType: string;
   optionsText: string;
+  diagramAssetText: string;
   answerText: string;
   solutionText: string;
   marks: string;
@@ -250,6 +252,15 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
                 />
               </label>
             ) : null}
+            {draft.questionType === "DIAGRAM" ? (
+              <label>
+                Diagram asset JSON
+                <textarea
+                  value={draft.diagramAssetText}
+                  onChange={(event) => setDraft((current) => ({ ...current, diagramAssetText: event.target.value }))}
+                />
+              </label>
+            ) : null}
             <label>
               Answer
               <textarea
@@ -300,6 +311,7 @@ function draftFromItem(item: ReviewItem | undefined): ReviewDraft {
     cleanedQuestionText: item?.candidate.cleanedQuestionText ?? "",
     questionType: item?.candidate.questionType ?? "UNKNOWN",
     optionsText: optionsTextFromValue(item?.candidate.options),
+    diagramAssetText: jsonTextFromValue(item?.candidate.diagramAsset),
     answerText: item?.candidate.answerText ?? "",
     solutionText: item?.candidate.solutionText ?? "",
     marks: item?.candidate.marks === null || item?.candidate.marks === undefined ? "" : String(item.candidate.marks),
@@ -317,6 +329,7 @@ function reviewPatchBody(item: ReviewItem, draft: ReviewDraft, decision: ReviewD
             cleanedQuestionText: draft.cleanedQuestionText,
             questionType: draft.questionType,
             options: parseOptionsDraft(draft.optionsText, draft.questionType),
+            diagramAsset: parseDiagramAssetDraft(draft.diagramAssetText, draft.questionType),
             answerText: draft.answerText,
             solutionText: draft.solutionText,
             marks: parseMarksDraft(draft.marks),
@@ -339,6 +352,7 @@ function correctionsFromDraft(item: ReviewItem, draft: ReviewDraft) {
     correction("cleanedQuestionText", item.candidate.cleanedQuestionText, draft.cleanedQuestionText, "OCR_ERROR"),
     correction("questionType", item.candidate.questionType, draft.questionType, "FORMATTING_ISSUE"),
     correction("options", optionsTextFromValue(item.candidate.options), draft.optionsText, "FORMATTING_ISSUE"),
+    correction("diagramAsset", jsonTextFromValue(item.candidate.diagramAsset), draft.diagramAssetText, "FORMATTING_ISSUE"),
     correction("answerText", item.candidate.answerText ?? "", draft.answerText, "WRONG_ANSWER"),
     correction("solutionText", item.candidate.solutionText ?? "", draft.solutionText, "BAD_SOLUTION"),
     correction("marks", item.candidate.marks === null ? "" : String(item.candidate.marks), draft.marks, "WRONG_MARKS"),
@@ -391,6 +405,30 @@ function parseOptionsDraft(value: string, questionType: string) {
   return options;
 }
 
+function parseDiagramAssetDraft(value: string, questionType: string) {
+  if (questionType !== "DIAGRAM") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed === null || parsed === undefined) {
+      throw new Error("Diagram asset JSON must not be null.");
+    }
+    return parsed;
+  } catch (error) {
+    if (error instanceof Error && error.message === "Diagram asset JSON must not be null.") {
+      throw error;
+    }
+    throw new Error("Diagram asset must be valid JSON.");
+  }
+}
+
 function parseJsonOptions(value: string) {
   let parsed: unknown;
   try {
@@ -428,6 +466,10 @@ function optionsTextFromValue(value: unknown) {
   }
 
   return JSON.stringify(value, null, 2);
+}
+
+function jsonTextFromValue(value: unknown) {
+  return value === null || value === undefined ? "" : JSON.stringify(value, null, 2);
 }
 
 function formatReasons(value: unknown) {

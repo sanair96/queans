@@ -131,6 +131,28 @@ describe("reviewPatchSchema", () => {
     });
   });
 
+  it("accepts edit approval for diagram questions with reviewed asset metadata", () => {
+    expect(
+      reviewPatchSchema.parse({
+        decision: "EDIT_AND_APPROVE",
+        reviewPayload: {
+          candidate: {
+            cleanedQuestionText: "Label the parts of the flower.",
+            questionType: "DIAGRAM",
+            diagramAsset: {
+              description: "Flower diagram from page 2",
+              sourcePage: 2
+            },
+            answerText: "Sepal, petal, stamen, and pistil.",
+            marks: 4
+          }
+        }
+      })
+    ).toMatchObject({
+      decision: "EDIT_AND_APPROVE"
+    });
+  });
+
   it("rejects edit approval with blank candidate text or answer", () => {
     expect(() =>
       reviewPatchSchema.parse({

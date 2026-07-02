@@ -91,6 +91,30 @@ describe("candidateUpdateForReviewedItem", () => {
       answerSourceBacked: true
     });
   });
+
+  it("applies reviewed diagram asset metadata", () => {
+    expect(
+      candidateUpdateForReviewedItem("EDITED", "EDIT_AND_APPROVE", {
+        candidate: {
+          cleanedQuestionText: "Label the flower.",
+          questionType: "DIAGRAM",
+          diagramAsset: {
+            description: "Flower diagram from page 2",
+            sourcePage: 2
+          },
+          answerText: "Sepal, petal, stamen, and pistil.",
+          marks: 4
+        }
+      })
+    ).toMatchObject({
+      questionType: "DIAGRAM",
+      diagramAsset: {
+        description: "Flower diagram from page 2",
+        sourcePage: 2
+      },
+      reviewStatus: "EDITED_AND_APPROVED"
+    });
+  });
 });
 
 describe("reviewedItemToApplyWhere", () => {

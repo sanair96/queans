@@ -411,9 +411,16 @@ describe("reviewReasonCodesFromJson", () => {
 describe("reviewEditApprovalConflictPayload", () => {
   it("blocks edited approval for structural reasons the edit form cannot resolve", () => {
     expect(
-      reviewEditApprovalConflictPayload({
-        reasonCodes: ["MCQ_OPTIONS_MISSING", "DIAGRAM_ASSET_MISSING", "MISSING_MARKS"]
-      })
+      reviewEditApprovalConflictPayload(
+        {
+          reasonCodes: ["MCQ_OPTIONS_MISSING", "DIAGRAM_ASSET_MISSING", "MISSING_MARKS"]
+        },
+        {
+          candidate: {
+            questionType: "DIAGRAM"
+          }
+        }
+      )
     ).toEqual({
       error: "REVIEW_EDIT_APPROVAL_REQUIRES_STRUCTURAL_FIX",
       message:
@@ -428,6 +435,41 @@ describe("reviewEditApprovalConflictPayload", () => {
         reasonCodes: ["MISSING_REQUIRED_FIELD", "MISSING_MARKS", "MCQ_OPTIONS_MISSING", "LOW_FIELD_CONFIDENCE"]
       })
     ).toBeUndefined();
+  });
+
+  it("allows edited approval when a diagram asset is supplied", () => {
+    expect(
+      reviewEditApprovalConflictPayload(
+        {
+          reasonCodes: ["DIAGRAM_ASSET_MISSING"]
+        },
+        {
+          candidate: {
+            diagramAsset: {
+              description: "Diagram crop on page 2"
+            }
+          }
+        }
+      )
+    ).toBeUndefined();
+  });
+
+  it("does not treat blank diagram asset text as supplied metadata", () => {
+    expect(
+      reviewEditApprovalConflictPayload(
+        {
+          reasonCodes: ["DIAGRAM_ASSET_MISSING"]
+        },
+        {
+          candidate: {
+            diagramAsset: " "
+          }
+        }
+      )
+    ).toMatchObject({
+      error: "REVIEW_EDIT_APPROVAL_REQUIRES_STRUCTURAL_FIX",
+      blockingReasons: ["DIAGRAM_ASSET_MISSING"]
+    });
   });
 });
 

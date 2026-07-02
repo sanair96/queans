@@ -739,6 +739,9 @@ function candidatePatchFromReviewPayload(value: Prisma.JsonValue): Prisma.Questi
       }
     }
   }
+  if ("diagramAsset" in candidate && candidate.diagramAsset !== undefined) {
+    patch.diagramAsset = candidate.diagramAsset === null ? Prisma.JsonNull : toInputJson(candidate.diagramAsset);
+  }
   if ("answerSourceType" in candidate && candidate.answerSourceType === "SOURCE_KEY") {
     patch.answerSourceType = candidate.answerSourceType;
     patch.answerSourceBacked = true;
