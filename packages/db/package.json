@@ -17,6 +17,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "db:deploy": "tsx src/run-prisma.ts migrate deploy --schema prisma/schema.prisma",
     "db:generate": "tsx src/run-prisma.ts generate --schema prisma/schema.prisma",
     "db:migrate": "tsx src/run-prisma.ts migrate dev --schema prisma/schema.prisma",
     "lint": "eslint .",

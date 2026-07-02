@@ -108,6 +108,12 @@ When using the alternate app database port, override the migration URL:
 DATABASE_URL="postgresql://queans:queans@localhost:55432/queans_dev?schema=public" pnpm db:migrate
 ```
 
+For production or production-like deploys, apply checked-in migrations without creating a development migration:
+
+```bash
+pnpm db:deploy
+```
+
 Run the app:
 
 ```bash
