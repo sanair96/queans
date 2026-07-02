@@ -12,7 +12,7 @@ import {
 import { Prisma, prisma, ReviewStatus, WorkflowStatus } from "@queans/db";
 import { loadR2ConfigFromEnv, R2ObjectStore, type StoredObjectHead } from "@queans/providers";
 
-import type { ReviewReasonCode, UploadCompleteInput } from "@queans/core";
+import type { ReviewPatchInput, ReviewReasonCode, UploadCompleteInput } from "@queans/core";
 import type { ApiConfig } from "./config.js";
 import { dispatchPendingWorkflowStarts } from "./outbox.js";
 import { checkReadiness } from "./readiness.js";
@@ -345,14 +345,7 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
       await prisma.$transaction(async (tx) => {
         const updateResult = await tx.reviewItem.updateMany({
           where: mutableReviewItemWhere(reviewItem.id),
-          data: {
-            status: reviewStatusForDecision(input.decision),
-            reviewedBy: input.reviewedBy ?? null,
-            reviewNotes: input.reviewNotes ?? null,
-            reviewPayload: toNullableInputJson(input.reviewPayload),
-            decision: input.decision,
-            reviewedAt: new Date()
-          }
+          data: reviewItemUpdateData(input)
         });
 
         if (updateResult.count === 0) {
@@ -645,6 +638,22 @@ export function mutableReviewItemWhere(id: string) {
     status: { in: [...mutableReviewStatuses] },
     appliedAt: null
   } satisfies Prisma.ReviewItemWhereInput;
+}
+
+export function reviewItemUpdateData(input: ReviewPatchInput, reviewedAt = new Date()) {
+  const data: Prisma.ReviewItemUpdateManyMutationInput = {
+    status: reviewStatusForDecision(input.decision),
+    reviewedBy: input.reviewedBy ?? null,
+    reviewNotes: input.reviewNotes ?? null,
+    decision: input.decision,
+    reviewedAt
+  };
+
+  if (Object.prototype.hasOwnProperty.call(input, "reviewPayload")) {
+    data.reviewPayload = toNullableInputJson(input.reviewPayload);
+  }
+
+  return data;
 }
 
 export function reviewApprovalConflictPayload(reviewItem: ReviewItemApprovalState) {

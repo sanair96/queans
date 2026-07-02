@@ -15,6 +15,7 @@ import {
   reviewApprovalConflictPayload,
   reviewEditApprovalConflictPayload,
   reviewItemAlreadyClosedPayload,
+  reviewItemUpdateData,
   reviewReasonCodesFromJson,
   reviewSignalRunForItem,
   uploadCompletionConflict,
@@ -326,6 +327,75 @@ describe("mutableReviewItemWhere", () => {
       id: "review-item-1",
       status: { in: [ReviewStatus.OPEN, ReviewStatus.ASSIGNED] },
       appliedAt: null
+    });
+  });
+});
+
+describe("reviewItemUpdateData", () => {
+  const reviewedAt = new Date("2026-07-02T10:20:30.000Z");
+
+  it("preserves the existing review payload when a decision omits reviewPayload", () => {
+    const data = reviewItemUpdateData(
+      {
+        decision: "NEEDS_MORE_INFO",
+        reviewedBy: "reviewer-1",
+        reviewNotes: "Need source answer key confirmation."
+      },
+      reviewedAt
+    );
+
+    expect(data).toEqual({
+      status: ReviewStatus.ASSIGNED,
+      reviewedBy: "reviewer-1",
+      reviewNotes: "Need source answer key confirmation.",
+      decision: "NEEDS_MORE_INFO",
+      reviewedAt
+    });
+    expect(data).not.toHaveProperty("reviewPayload");
+  });
+
+  it("clears the review payload only when reviewPayload is explicitly null", () => {
+    expect(
+      reviewItemUpdateData(
+        {
+          decision: "REJECT",
+          reviewPayload: null
+        },
+        reviewedAt
+      )
+    ).toEqual({
+      status: ReviewStatus.REJECTED,
+      reviewedBy: null,
+      reviewNotes: null,
+      reviewPayload: null,
+      decision: "REJECT",
+      reviewedAt
+    });
+  });
+
+  it("stores edited candidate payloads for edit approval decisions", () => {
+    const reviewPayload = {
+      candidate: {
+        cleanedQuestionText: "Define inertia.",
+        questionType: "SHORT_ANSWER",
+        answerText: "The tendency to resist change in motion.",
+        marks: 2
+      }
+    };
+
+    expect(
+      reviewItemUpdateData(
+        {
+          decision: "EDIT_AND_APPROVE",
+          reviewPayload
+        },
+        reviewedAt
+      )
+    ).toMatchObject({
+      status: ReviewStatus.EDITED,
+      reviewPayload,
+      decision: "EDIT_AND_APPROVE",
+      reviewedAt
     });
   });
 });
