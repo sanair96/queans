@@ -356,32 +356,20 @@ export async function solveQuestionsAndPersist(input: PaperIngestionWorkflowInpu
   const extractor = createQuestionExtractorFromEnv(process.env);
   const objectStore = new R2ObjectStore(loadR2ConfigFromEnv(process.env));
   const solverRequestIntervalMs = solverRequestIntervalFromEnv(process.env);
-  let candidatesSolved = 0;
-  let candidatesFailed = 0;
-  let promptTokens = 0;
-  let completionTokens = 0;
-  let model: string | undefined;
-
-  for (const [index, candidate] of candidates.entries()) {
-    try {
-      if (index > 0 && solverRequestIntervalMs > 0) {
-        await sleep(solverRequestIntervalMs);
-      }
-      const solved = await solveCandidateWithRetry({
-        extractor,
-        candidate: candidateToExtracted(candidate),
-        imageUrls: await signedImageUrlsForCandidate(candidate, objectStore)
-      });
-      model = solved.model;
-      promptTokens += solved.usage.promptTokens ?? 0;
-      completionTokens += solved.usage.completionTokens ?? 0;
-      await updateSolvedCandidate(candidate.id, solved.candidate);
-      candidatesSolved += 1;
-    } catch (error) {
-      await markCandidateSolveFailed(candidate.id, error);
-      candidatesFailed += 1;
-    }
-  }
+  const solverConcurrency = solverConcurrencyFromEnv(process.env);
+  const outcomes = await mapWithConcurrency(candidates, solverConcurrency, async (candidate, index) =>
+    solveCandidateAndPersist({
+      extractor,
+      objectStore,
+      candidate,
+      delayMs: solverConcurrency === 1 && index > 0 ? solverRequestIntervalMs : 0
+    })
+  );
+  const candidatesSolved = outcomes.filter((outcome) => outcome.solved).length;
+  const candidatesFailed = outcomes.length - candidatesSolved;
+  const promptTokens = outcomes.reduce((total, outcome) => total + (outcome.promptTokens ?? 0), 0);
+  const completionTokens = outcomes.reduce((total, outcome) => total + (outcome.completionTokens ?? 0), 0);
+  const model = outcomes.find((outcome) => outcome.model)?.model;
 
   const usage = {
     promptTokens,
@@ -398,7 +386,8 @@ export async function solveQuestionsAndPersist(input: PaperIngestionWorkflowInpu
       synchronous: true,
       candidatesSubmitted: candidates.length,
       candidatesSolved,
-      candidatesFailed
+      candidatesFailed,
+      solverConcurrency
     }
   });
 
@@ -408,6 +397,36 @@ export async function solveQuestionsAndPersist(input: PaperIngestionWorkflowInpu
     candidatesFailed,
     model: model ?? config.solverModel
   };
+}
+
+async function solveCandidateAndPersist(input: {
+  extractor: ReturnType<typeof createQuestionExtractorFromEnv>;
+  objectStore: R2ObjectStore;
+  candidate: Awaited<ReturnType<typeof prisma.questionCandidate.findMany>>[number];
+  delayMs: number;
+}) {
+  try {
+    if (input.delayMs > 0) {
+      await sleep(input.delayMs);
+    }
+    const solved = await solveCandidateWithRetry({
+      extractor: input.extractor,
+      candidate: candidateToExtracted(input.candidate),
+      imageUrls: await signedImageUrlsForCandidate(input.candidate, input.objectStore)
+    });
+    await updateSolvedCandidate(input.candidate.id, solved.candidate);
+    return {
+      solved: true,
+      model: solved.model,
+      promptTokens: solved.usage.promptTokens,
+      completionTokens: solved.usage.completionTokens
+    };
+  } catch (error) {
+    await markCandidateSolveFailed(input.candidate.id, error);
+    return {
+      solved: false
+    };
+  }
 }
 
 async function persistExtractedCandidates(input: PaperIngestionWorkflowInput, extraction: QuestionExtractionResult) {
@@ -530,26 +549,297 @@ function normalizeFingerprintPart(value: string | undefined) {
 async function updateSolvedCandidate(candidateId: string, candidate: ExtractedQuestionCandidate) {
   await prisma.$transaction(async (tx) => {
     const existing = await tx.questionCandidate.findUnique({
-      where: { id: candidateId },
-      select: {
-        id: true,
-        approvedQuestionId: true,
-        reviewStatus: true
-      }
+      where: { id: candidateId }
     });
 
     if (!existing || shouldSkipExistingCandidateForExtraction(existing)) {
       return;
     }
 
-    const taxonomy = await resolveCandidateTaxonomy(tx, candidate);
-    const fieldConfidences = fieldConfidenceRows(candidate);
+    const mergedCandidate = mergeSolvedCandidate(candidateToExtracted(existing), candidate);
+    const subquestionCandidates = splitSubquestionEvidenceCandidate(mergedCandidate);
+    if (subquestionCandidates.length > 0) {
+      await tx.questionCandidate.update({
+        where: { id: candidateId },
+        data: {
+          reviewStatus: CandidateStatus.UNPROCESSABLE,
+          validationErrors: toInputJson([]),
+          extractedPayload: toInputJson(mergedCandidate)
+        }
+      });
+      for (const subquestionCandidate of subquestionCandidates) {
+        await upsertSolvedSubquestionCandidate(tx, existing.sourcePaperId, subquestionCandidate);
+      }
+      return;
+    }
+
+    const taxonomy = await resolveCandidateTaxonomy(tx, mergedCandidate);
+    const fieldConfidences = fieldConfidenceRows(mergedCandidate);
     await tx.questionCandidate.update({
       where: { id: candidateId },
-      data: candidatePersistenceData(candidate, taxonomy)
+      data: candidatePersistenceData(mergedCandidate, taxonomy)
     });
     await replaceFieldConfidences(tx, candidateId, fieldConfidences);
   });
+}
+
+async function upsertSolvedSubquestionCandidate(
+  tx: Prisma.TransactionClient,
+  sourcePaperId: string,
+  candidate: ExtractedQuestionCandidate
+) {
+  const taxonomy = await resolveCandidateTaxonomy(tx, candidate);
+  const fingerprint = candidateFingerprint(candidate);
+  const fieldConfidences = fieldConfidenceRows(candidate);
+  const candidateData = candidatePersistenceData(candidate, taxonomy);
+  const existingCandidate = await tx.questionCandidate.findUnique({
+    where: {
+      sourcePaperId_fingerprint: {
+        sourcePaperId,
+        fingerprint
+      }
+    },
+    select: {
+      id: true,
+      approvedQuestionId: true,
+      reviewStatus: true
+    }
+  });
+
+  if (existingCandidate && shouldSkipExistingCandidateForExtraction(existingCandidate)) {
+    return;
+  }
+
+  if (existingCandidate) {
+    await tx.questionCandidate.update({
+      where: { id: existingCandidate.id },
+      data: {
+        fingerprint,
+        ...candidateData
+      }
+    });
+    await replaceFieldConfidences(tx, existingCandidate.id, fieldConfidences);
+    return;
+  }
+
+  await tx.questionCandidate.create({
+    data:
+      fieldConfidences.length > 0
+        ? {
+            sourcePaperId,
+            fingerprint,
+            ...candidateData,
+            fieldConfidences: {
+              create: fieldConfidences
+            }
+          }
+        : {
+            sourcePaperId,
+            fingerprint,
+            ...candidateData
+          },
+    select: { id: true }
+  });
+}
+
+export function splitSubquestionEvidenceCandidate(candidate: ExtractedQuestionCandidate): ExtractedQuestionCandidate[] {
+  const evidence = sourceEvidenceRecord(candidate.sourceEvidence);
+  const rawSubquestions = evidence.subquestions;
+  if (!Array.isArray(rawSubquestions) || rawSubquestions.length < 2) {
+    return [];
+  }
+
+  const parentQuestionNumber = candidate.parentQuestionNumber ?? candidate.questionNumber;
+  if (!parentQuestionNumber) {
+    return [];
+  }
+
+  const questionTextByPart = subquestionTextByPart(candidate.cleanedQuestionText);
+  const stemText = candidate.stemText ?? textBeforeFirstSubquestion(candidate.cleanedQuestionText);
+  const groupKey = candidate.groupKey ?? `${candidate.sectionName ?? "question"}:${parentQuestionNumber}`;
+  const questionLabel = candidate.questionLabel ?? `Question ${parentQuestionNumber}`;
+
+  return rawSubquestions.flatMap((item, index) => {
+    const subquestion = sourceEvidenceRecord(item);
+    const partLabel = normalizePartLabel(stringRecordValue(subquestion, "part_label"));
+    const answerText = stringRecordValue(subquestion, "answer_text") ?? stringRecordValue(subquestion, "answerText");
+    const questionText = partLabel ? questionTextByPart.get(partLabel) : undefined;
+    if (!partLabel || !questionText || !answerText) {
+      return [];
+    }
+
+    const marks = numberRecordValue(subquestion, "marks");
+    const solutionText = stringRecordValue(subquestion, "solution_text") ?? stringRecordValue(subquestion, "solutionText");
+    const fieldConfidence = {
+      ...candidate.fieldConfidence,
+      marks: Math.max(candidate.fieldConfidence.marks ?? 0, marks === undefined ? 0 : 1),
+      answer_text: Math.max(candidate.fieldConfidence.answer_text ?? 0, 0.95)
+    };
+    const splitCandidate: ExtractedQuestionCandidate = {
+      ...candidate,
+      questionNumber: `${parentQuestionNumber}(${partLabel})`,
+      parentQuestionNumber,
+      questionLabel,
+      partLabel,
+      groupKey,
+      stemText,
+      displayOrder: (candidate.displayOrder ?? 0) + index,
+      cleanedQuestionText: questionText,
+      rawOcrText: `${stemText}\n(${partLabel}) ${questionText}`,
+      questionType: "SHORT_ANSWER",
+      marks,
+      options: undefined,
+      answerText,
+      solutionText,
+      answerSourceType: candidate.answerSourceType,
+      answerSourceBacked: candidate.answerSourceBacked,
+      fieldConfidence,
+      validationErrors: reconcileMergedValidationErrors({
+        ...candidate,
+        questionType: "SHORT_ANSWER",
+        marks,
+        options: undefined,
+        answerText,
+        answerSourceBacked: candidate.answerSourceBacked,
+        fieldConfidence,
+        validationErrors: candidate.validationErrors
+      }),
+      sourceEvidence: subquestion
+    };
+
+    return [splitCandidate];
+  });
+}
+
+function mergeSolvedCandidate(
+  existing: ExtractedQuestionCandidate,
+  solved: ExtractedQuestionCandidate
+): ExtractedQuestionCandidate {
+  const evidence = sourceEvidenceRecord(solved.sourceEvidence);
+  const marks = solved.marks ?? numberRecordValue(evidence, "marks") ?? existing.marks;
+  const evidenceAnswerText = stringRecordValue(evidence, "answer_text") ?? stringRecordValue(evidence, "answerText");
+  const answerText = nonEmptySolvedValue(
+    solved.answerText,
+    evidenceAnswerText ?? existing.answerText
+  );
+  const solvedProvidedAnswer =
+    (solved.answerText?.trim() !== undefined && solved.answerText.trim().length > 0) || evidenceAnswerText !== undefined;
+  const merged = {
+    ...existing,
+    questionNumber: nonEmptySolvedValue(solved.questionNumber, stringRecordValue(evidence, "question_number") ?? existing.questionNumber),
+    sectionName: nonEmptySolvedValue(solved.sectionName, stringRecordValue(evidence, "section_name") ?? existing.sectionName),
+    pageNumber: solved.pageNumber ?? existing.pageNumber,
+    sourcePageStart: solved.sourcePageStart ?? existing.sourcePageStart,
+    sourcePageEnd: solved.sourcePageEnd ?? existing.sourcePageEnd,
+    rawOcrText: nonEmptySolvedValue(solved.rawOcrText, existing.rawOcrText),
+    cleanedQuestionText: nonEmptySolvedValue(solved.cleanedQuestionText, existing.cleanedQuestionText),
+    parentQuestionNumber: nonEmptySolvedValue(
+      solved.parentQuestionNumber,
+      stringRecordValue(evidence, "parent_question_number") ?? existing.parentQuestionNumber
+    ),
+    questionLabel: nonEmptySolvedValue(solved.questionLabel, existing.questionLabel),
+    partLabel: nonEmptySolvedValue(solved.partLabel, stringRecordValue(evidence, "part_label") ?? existing.partLabel),
+    groupKey: nonEmptySolvedValue(solved.groupKey, stringRecordValue(evidence, "group_key") ?? existing.groupKey),
+    stemText: nonEmptySolvedValue(solved.stemText, existing.stemText),
+    displayOrder: solved.displayOrder ?? existing.displayOrder,
+    questionType: solved.questionType === "UNKNOWN" ? existing.questionType : solved.questionType,
+    marks,
+    options: solved.options ?? existing.options,
+    answerText,
+    solutionText: nonEmptySolvedValue(solved.solutionText, existing.solutionText),
+    answerSourceType: solvedProvidedAnswer ? solved.answerSourceType : existing.answerSourceType,
+    answerSourceBacked: solvedProvidedAnswer ? solved.answerSourceBacked : existing.answerSourceBacked,
+    chapter: nonEmptySolvedValue(solved.chapter, existing.chapter),
+    topic: nonEmptySolvedValue(solved.topic, existing.topic),
+    subtopic: nonEmptySolvedValue(solved.subtopic, existing.subtopic),
+    difficulty: nonEmptySolvedValue(solved.difficulty, existing.difficulty),
+    bloomLevel: nonEmptySolvedValue(solved.bloomLevel, existing.bloomLevel),
+    requiresDiagram: solved.requiresDiagram || existing.requiresDiagram,
+    diagramAsset: solved.diagramAsset ?? existing.diagramAsset,
+    fieldConfidence: {
+      ...existing.fieldConfidence,
+      ...solved.fieldConfidence
+    },
+    overallConfidence: Math.max(existing.overallConfidence, solved.overallConfidence),
+    validationErrors: reconcileMergedValidationErrors({
+      ...existing,
+      ...solved,
+      marks,
+      options: solved.options ?? existing.options,
+      answerText,
+      cleanedQuestionText: nonEmptySolvedValue(solved.cleanedQuestionText, existing.cleanedQuestionText),
+      validationErrors: [...existing.validationErrors, ...solved.validationErrors]
+    }),
+    sourceEvidence: solved.sourceEvidence ?? existing.sourceEvidence
+  };
+
+  return merged;
+}
+
+function nonEmptySolvedValue<T extends string | undefined>(solvedValue: T, existingValue: T) {
+  return solvedValue?.trim() ? solvedValue : existingValue;
+}
+
+function sourceEvidenceRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function stringRecordValue(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function numberRecordValue(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function subquestionTextByPart(text: string) {
+  const entries = new Map<string, string>();
+  const partPattern = /\(([a-z])\)\s*([\s\S]*?)(?=\n?\([a-z]\)\s*|$)/giu;
+  for (const match of text.matchAll(partPattern)) {
+    const partLabel = normalizePartLabel(match[1]);
+    const questionText = match[2]?.replace(/\(\s*\d+(?:\.\d+)?\s*marks?\s*\)\s*$/iu, "").trim();
+    if (partLabel && questionText) {
+      entries.set(partLabel, questionText);
+    }
+  }
+  return entries;
+}
+
+function textBeforeFirstSubquestion(text: string) {
+  return text.split(/\n?\([a-z]\)\s*/iu)[0]?.replace(/Answer the following questions?:?\s*$/iu, "").trim() ?? text;
+}
+
+function normalizePartLabel(value: string | undefined) {
+  const match = /^\(?\s*([a-z])\s*\)?$/iu.exec(value ?? "");
+  return match?.[1]?.toLowerCase();
+}
+
+function reconcileMergedValidationErrors(candidate: ExtractedQuestionCandidate) {
+  return [...new Set(candidate.validationErrors)].filter((reason) => {
+    if (reason === "MISSING_QUESTION_TEXT") {
+      return candidate.cleanedQuestionText.trim().length === 0;
+    }
+    if (reason === "MISSING_MARKS") {
+      return candidate.marks === undefined;
+    }
+    if (reason === "MCQ_OPTIONS_MISSING") {
+      return candidate.questionType === "MCQ" && !mergedCandidateHasMcqOptions(candidate.options);
+    }
+    if (reason === "ANSWER_UNCERTAIN") {
+      const answerConfidence = candidate.fieldConfidence.answer_text ?? 0;
+      return !candidate.answerText?.trim() || !candidate.answerSourceBacked || answerConfidence < 0.86;
+    }
+    return true;
+  });
+}
+
+function mergedCandidateHasMcqOptions(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.filter((item) => typeof item === "string" && item.trim().length > 0).length >= 2;
+  }
+  return false;
 }
 
 async function markCandidateSolveFailed(candidateId: string, error: unknown) {
@@ -596,6 +886,38 @@ function solverRequestIntervalFromEnv(env: NodeJS.ProcessEnv) {
 
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 15000;
+}
+
+function solverConcurrencyFromEnv(env: NodeJS.ProcessEnv) {
+  const raw = env.MISTRAL_SOLVER_CONCURRENCY?.trim();
+  if (!raw) {
+    return 1;
+  }
+
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>
+) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        results[currentIndex] = await worker(items[currentIndex] as T, currentIndex);
+      }
+    })
+  );
+
+  return results;
 }
 
 function sleep(ms: number) {
@@ -780,12 +1102,16 @@ function mapQuestionType(value: string) {
     case "assertion_reasoning":
       return QuestionType.MCQ;
     case "short_answer":
+    case "theoretical":
       return QuestionType.SHORT_ANSWER;
     case "long_answer":
       return QuestionType.LONG_ANSWER;
     case "numerical":
       return QuestionType.NUMERICAL;
     case "true_false":
+    case "true_false_correction":
+    case "correct_incorrect":
+    case "correct_incorrect_correction":
       return QuestionType.TRUE_FALSE;
     case "fill_in_the_blank":
       return QuestionType.FILL_IN_THE_BLANK;

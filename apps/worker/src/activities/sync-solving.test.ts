@@ -114,6 +114,8 @@ const { solveQuestionsAndPersist } = await import("./llm.activities.js");
 describe("solveQuestionsAndPersist", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.MISTRAL_SOLVER_CONCURRENCY;
+    delete process.env.MISTRAL_SOLVER_REQUEST_INTERVAL_MS;
     mocks.prisma.$transaction.mockImplementation(async (callback: (tx: typeof mocks.tx) => Promise<unknown>) =>
       callback(mocks.tx)
     );
@@ -123,11 +125,7 @@ describe("solveQuestionsAndPersist", () => {
       body: Uint8Array.from([104, 105]),
       contentType: "image/png"
     });
-    mocks.tx.questionCandidate.findUnique.mockResolvedValue({
-      id: "candidate-1",
-      approvedQuestionId: null,
-      reviewStatus: "EXTRACTED"
-    });
+    mocks.tx.questionCandidate.findUnique.mockResolvedValue(candidateRow);
     mocks.tx.questionCandidate.update.mockResolvedValue({ id: "candidate-1" });
     mocks.tx.candidateFieldConfidence.deleteMany.mockResolvedValue({ count: 0 });
     mocks.tx.candidateFieldConfidence.createMany.mockResolvedValue({ count: 1 });
@@ -187,6 +185,7 @@ describe("solveQuestionsAndPersist", () => {
           candidatesSubmitted: 1,
           candidatesSolved: 1,
           candidatesFailed: 0,
+          solverConcurrency: 1,
           batchDiscountRatio: 1
         }
       },
@@ -205,6 +204,7 @@ describe("solveQuestionsAndPersist", () => {
           candidatesSubmitted: 1,
           candidatesSolved: 1,
           candidatesFailed: 0,
+          solverConcurrency: 1,
           batchDiscountRatio: 1
         }
       }
@@ -265,6 +265,227 @@ describe("solveQuestionsAndPersist", () => {
       ]
     );
   });
+
+  it("preserves extracted grouping, marks, and options when the solver only adds the answer", async () => {
+    const multipartCandidate = {
+      ...candidateRow,
+      parentQuestionNumber: "21",
+      questionLabel: "Question 21",
+      partLabel: "a",
+      groupKey: "section-d:21",
+      stemText: "A boy tries to push a heavy box on the floor.",
+      questionType: "MCQ",
+      marks: 1,
+      options: ["Static friction", "Sliding friction", "Rolling friction", "Fluid friction"],
+      validationErrors: ["ANSWER_UNCERTAIN"]
+    };
+    mocks.prisma.questionCandidate.findMany.mockResolvedValue([multipartCandidate]);
+    mocks.tx.questionCandidate.findUnique.mockResolvedValue(multipartCandidate);
+    mocks.extractor.solveCandidate.mockResolvedValue({
+      provider: "mistral",
+      model: "mistral-large-latest",
+      candidate: {
+        ...solvedCandidate,
+        parentQuestionNumber: undefined,
+        questionLabel: undefined,
+        partLabel: undefined,
+        groupKey: undefined,
+        stemText: undefined,
+        questionType: "UNKNOWN",
+        marks: undefined,
+        options: undefined,
+        answerText: "Static friction",
+        validationErrors: ["MISSING_MARKS", "MCQ_OPTIONS_MISSING"]
+      },
+      rawJson: { id: "completion-1" },
+      usage: {
+        promptTokens: 1000,
+        completionTokens: 500,
+        totalTokens: 1500
+      }
+    });
+
+    await solveQuestionsAndPersist({
+      ingestionRunId: "run-1",
+      sourcePaperId: "source-1"
+    });
+
+    const updatePayload = mocks.tx.questionCandidate.update.mock.calls[0]?.[0] as
+      | { where: { id: string }; data: Record<string, unknown> }
+      | undefined;
+    expect(updatePayload).toBeDefined();
+    expect(updatePayload?.where).toEqual({ id: "candidate-1" });
+    expect(updatePayload?.data).toMatchObject({
+      parentQuestionNumber: "21",
+      questionLabel: "Question 21",
+      partLabel: "a",
+      groupKey: "section-d:21",
+      stemText: "A boy tries to push a heavy box on the floor.",
+      questionType: "MCQ",
+      marks: 1,
+      options: ["Static friction", "Sliding friction", "Rolling friction", "Fluid friction"],
+      answerText: "Static friction",
+      validationErrors: ["ANSWER_UNCERTAIN"]
+    });
+  });
+
+  it("promotes source-evidence marks and answers from partial solver responses", async () => {
+    const fillBlankCandidate = {
+      ...candidateRow,
+      cleanedQuestionText: "The force acting per unit area is called __________.",
+      questionType: "FILL_IN_THE_BLANK",
+      marks: null,
+      answerText: null,
+      validationErrors: ["MISSING_MARKS", "ANSWER_UNCERTAIN"]
+    };
+    mocks.prisma.questionCandidate.findMany.mockResolvedValue([fillBlankCandidate]);
+    mocks.tx.questionCandidate.findUnique.mockResolvedValue(fillBlankCandidate);
+    mocks.extractor.solveCandidate.mockResolvedValue({
+      provider: "mistral",
+      model: "mistral-large-latest",
+      candidate: {
+        ...solvedCandidate,
+        cleanedQuestionText: "The force acting per unit area is called __________.",
+        questionType: "FILL_IN_THE_BLANK",
+        marks: undefined,
+        answerText: undefined,
+        answerSourceType: "SOURCE_KEY",
+        answerSourceBacked: true,
+        fieldConfidence: {
+          question_text: 0.99,
+          question_type: 1,
+          marks: 1,
+          answer_text: 1
+        },
+        validationErrors: ["MISSING_MARKS", "ANSWER_UNCERTAIN"],
+        sourceEvidence: {
+          marks: 1,
+          answer_text: "Pressure",
+          question_number: "1",
+          section_name: "Section B: Fill in the blanks (5 x 1 = 5 marks)"
+        }
+      },
+      rawJson: { id: "completion-1" },
+      usage: {
+        promptTokens: 1000,
+        completionTokens: 500,
+        totalTokens: 1500
+      }
+    });
+
+    await solveQuestionsAndPersist({
+      ingestionRunId: "run-1",
+      sourcePaperId: "source-1"
+    });
+
+    const updatePayload = mocks.tx.questionCandidate.update.mock.calls[0]?.[0] as
+      | { where: { id: string }; data: Record<string, unknown> }
+      | undefined;
+    expect(updatePayload?.data).toMatchObject({
+      marks: 1,
+      answerText: "Pressure",
+      answerSourceType: "SOURCE_KEY",
+      answerSourceBacked: true,
+      sectionName: "Section B: Fill in the blanks (5 x 1 = 5 marks)",
+      validationErrors: []
+    });
+  });
+
+  it("solves candidates concurrently when local solver concurrency is configured", async () => {
+    process.env.MISTRAL_SOLVER_CONCURRENCY = "2";
+    process.env.MISTRAL_SOLVER_REQUEST_INTERVAL_MS = "0";
+    mocks.prisma.questionCandidate.findMany.mockResolvedValue([
+      candidateRow,
+      {
+        ...candidateRow,
+        id: "candidate-2",
+        questionNumber: "2",
+        cleanedQuestionText: "Define pressure."
+      }
+    ]);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    mocks.extractor.solveCandidate.mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      inFlight -= 1;
+      return {
+        provider: "mistral",
+        model: "mistral-large-latest",
+        candidate: solvedCandidate,
+        rawJson: { id: "completion-1" },
+        usage: {
+          promptTokens: 1000,
+          completionTokens: 500,
+          totalTokens: 1500
+        }
+      };
+    });
+
+    await expect(
+      solveQuestionsAndPersist({
+        ingestionRunId: "run-1",
+        sourcePaperId: "source-1"
+      })
+    ).resolves.toMatchObject({
+      candidatesSubmitted: 2,
+      candidatesSolved: 2,
+      candidatesFailed: 0
+    });
+
+    expect(maxInFlight).toBe(2);
+    expect(mocks.extractor.solveCandidate).toHaveBeenCalledTimes(2);
+    expect(mocks.tx.providerRunCost.upsert).toHaveBeenCalledWith({
+      where: {
+        workflowRunId_operation: {
+          workflowRunId: "run-1",
+          operation: "question_solving"
+        }
+      },
+      create: {
+        workflowRunId: "run-1",
+        operation: "question_solving",
+        provider: "mistral",
+        model: "mistral-large-latest",
+        pageCount: null,
+        inputTokenCount: 2000,
+        outputTokenCount: 1000,
+        estimatedCostUsd: "0.000900",
+        rawUsage: {
+          promptTokens: 2000,
+          completionTokens: 1000,
+          totalTokens: 3000,
+          synchronous: true,
+          candidatesSubmitted: 2,
+          candidatesSolved: 2,
+          candidatesFailed: 0,
+          solverConcurrency: 2,
+          batchDiscountRatio: 1
+        }
+      },
+      update: {
+        provider: "mistral",
+        model: "mistral-large-latest",
+        pageCount: null,
+        inputTokenCount: 2000,
+        outputTokenCount: 1000,
+        estimatedCostUsd: "0.000900",
+        rawUsage: {
+          promptTokens: 2000,
+          completionTokens: 1000,
+          totalTokens: 3000,
+          synchronous: true,
+          candidatesSubmitted: 2,
+          candidatesSolved: 2,
+          candidatesFailed: 0,
+          solverConcurrency: 2,
+          batchDiscountRatio: 1
+        }
+      }
+    });
+  });
 });
 
 const candidateRow = {
@@ -275,6 +496,12 @@ const candidateRow = {
   pageNumber: 1,
   sourcePageStart: null,
   sourcePageEnd: null,
+  parentQuestionNumber: null,
+  questionLabel: null,
+  partLabel: null,
+  groupKey: null,
+  stemText: null,
+  displayOrder: null,
   rawOcrText: "1. Define force.",
   cleanedQuestionText: "Define force.",
   questionType: "SHORT_ANSWER",

@@ -13,10 +13,11 @@ const timeoutMs = numberFromEnv("QUEANS_SMOKE_TIMEOUT_MS", 30 * 60_000);
 const filePattern = process.env.QUEANS_SMOKE_FILE_PATTERN ? new RegExp(process.env.QUEANS_SMOKE_FILE_PATTERN, "iu") : undefined;
 const resetDb = args.has("--reset-db");
 const autoApproveReview = args.has("--auto-approve-review");
+const autoResolveBlockedReview = args.has("--auto-resolve-blocked-review");
 
 if (resetDb) {
   run("pnpm", ["--filter", "@queans/db", "exec", "tsx", "src/run-prisma.ts", "migrate", "reset", "--schema", "prisma/schema.prisma", "--force"]);
-  run("pnpm", ["db:migrate"]);
+  run("pnpm", ["db:deploy"]);
 }
 
 await assertApiReady();
@@ -82,8 +83,10 @@ while (Date.now() < deadline) {
 
   const waitingForReview = statuses.filter((status) => status.status === "WAITING_FOR_REVIEW");
   if (waitingForReview.length > 0 && autoApproveReview) {
-    const approved = await approveOpenReviewItems();
-    console.log(`Auto-approved ${approved} open review item(s).`);
+    const reviewResolution = await resolveOpenReviewItems();
+    console.log(
+      `Auto-approved ${reviewResolution.approved} open review item(s); marked ${reviewResolution.markedUnprocessable} blocker(s) unprocessable; ${reviewResolution.blocked} still blocked.`
+    );
   }
 
   if (statuses.every((status) => status.status === "COMPLETED")) {
@@ -118,7 +121,9 @@ if (incomplete.length > 0) {
   throw new Error(`Timed out before all ingestions completed: ${incomplete.map((status) => `${status.fileName}:${status.status}`).join(", ")}`);
 }
 if (reviewTasks.reviewItems.length > 0) {
-  throw new Error(`Smoke run still has ${reviewTasks.reviewItems.length} open review item(s). Re-run with --auto-approve-review only for local test data.`);
+  throw new Error(
+    `Smoke run still has ${reviewTasks.reviewItems.length} open review item(s). Re-run with --auto-approve-review --auto-resolve-blocked-review only for local test data.`
+  );
 }
 if (visibleQuestions.length === 0) {
   throw new Error("Smoke run completed but no approved questions from qps/ are visible through /api/questions.");
@@ -144,9 +149,11 @@ async function ingestionStatus(run) {
   };
 }
 
-async function approveOpenReviewItems() {
+async function resolveOpenReviewItems() {
   const reviewTasks = await apiGet("/api/review/tasks");
   let approved = 0;
+  let markedUnprocessable = 0;
+  let blocked = 0;
   for (const item of reviewTasks.reviewItems) {
     const response = await fetch(`${apiUrl}/api/review/tasks/${item.id}`, {
       method: "PATCH",
@@ -160,9 +167,28 @@ async function approveOpenReviewItems() {
       approved += 1;
     } else if (response.status !== 409) {
       throw new Error(`Review approval failed for ${item.id}: ${response.status} ${await response.text()}`);
+    } else if (autoResolveBlockedReview) {
+      const rejected = await fetch(`${apiUrl}/api/review/tasks/${item.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          decision: "MARK_UNPROCESSABLE",
+          reviewedBy: "qps-smoke-runner"
+        })
+      });
+      if (!rejected.ok && rejected.status !== 409) {
+        throw new Error(`Review blocker resolution failed for ${item.id}: ${rejected.status} ${await rejected.text()}`);
+      }
+      if (rejected.ok) {
+        markedUnprocessable += 1;
+      } else {
+        blocked += 1;
+      }
+    } else {
+      blocked += 1;
     }
   }
-  return approved;
+  return { approved, markedUnprocessable, blocked };
 }
 
 function printStatus(statuses) {

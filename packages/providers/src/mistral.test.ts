@@ -177,6 +177,58 @@ describe("parseMistralExtractionContent", () => {
     expect(candidate?.validationErrors).toEqual(["MISSING_MARKS", "MCQ_OPTIONS_MISSING", "ANSWER_UNCERTAIN"]);
   });
 
+  it("normalizes keyed MCQ options before validation", () => {
+    const [candidate] = parseMistralExtractionContent(
+      JSON.stringify({
+        candidates: [
+          {
+            ...baseCandidate,
+            question_type: "MCQ",
+            options: {
+              a: "Fuel",
+              b: "Lubricant",
+              c: "Coolant",
+              d: "Solvent"
+            },
+            answer_text: "Lubricant"
+          }
+        ]
+      })
+    );
+
+    expect(candidate).toMatchObject({
+      questionType: "MCQ",
+      options: ["(a) Fuel", "(b) Lubricant", "(c) Coolant", "(d) Solvent"],
+      validationErrors: []
+    });
+  });
+
+  it("normalizes labeled MCQ option objects before validation", () => {
+    const [candidate] = parseMistralExtractionContent(
+      JSON.stringify({
+        candidates: [
+          {
+            ...baseCandidate,
+            question_type: "MCQ",
+            options: [
+              { label: "(a)", text: "Shape of a body" },
+              { label: "(b)", text: "Speed of a body" },
+              { label: "(c)", text: "Direction of motion" },
+              { label: "(d)", text: "All of these" }
+            ],
+            answer_text: "(d) All of these"
+          }
+        ]
+      })
+    );
+
+    expect(candidate).toMatchObject({
+      questionType: "MCQ",
+      options: ["(a) Shape of a body", "(b) Speed of a body", "(c) Direction of motion", "(d) All of these"],
+      validationErrors: []
+    });
+  });
+
   it("preserves diagram asset references", () => {
     const [candidate] = parseMistralExtractionContent(
       JSON.stringify({

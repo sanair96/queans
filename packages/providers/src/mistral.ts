@@ -609,9 +609,10 @@ function normalizeExtractionCandidate(candidate: z.infer<typeof extractionCandid
   const requiresDiagram = candidate.requires_diagram && (diagramAsset !== undefined || referencesProvidedDiagram(candidate.cleaned_question_text));
   const grouping = normalizeGroupingFields(candidate);
   const questionType = normalizeQuestionTypeLabel(candidate.question_type);
+  const options = normalizeQuestionOptions(candidate.options) ?? candidate.options;
   const validationErrors = normalizeValidationErrors([
     ...candidate.validation_errors.filter((reason) => reason !== "DIAGRAM_ASSET_MISSING" || requiresDiagram),
-    ...requiredFieldValidationErrors(candidate, questionType, requiresDiagram, diagramAsset),
+    ...requiredFieldValidationErrors({ ...candidate, options }, questionType, requiresDiagram, diagramAsset),
     ...(invalidConfidence ? ["VALIDATION_FAILED"] : [])
   ]);
 
@@ -631,7 +632,7 @@ function normalizeExtractionCandidate(candidate: z.infer<typeof extractionCandid
     displayOrder: candidate.display_order,
     questionType,
     marks: candidate.marks,
-    options: candidate.options,
+    options,
     answerText: candidate.answer_text,
     solutionText: candidate.solution_text,
     answerSourceType: candidate.answer_source_type,
@@ -706,15 +707,56 @@ function requiredFieldValidationErrors(
 }
 
 function hasMcqOptions(value: unknown) {
+  return (normalizeQuestionOptions(value)?.length ?? 0) >= 2;
+}
+
+function normalizeQuestionOptions(value: unknown): string[] | undefined {
   if (Array.isArray(value)) {
-    return value.filter((item) => typeof item === "string" && item.trim().length > 0).length >= 2;
+    const options = value.flatMap((item) => normalizeOptionItem(item));
+    return options.length >= 2 ? options : undefined;
   }
   if (!value || typeof value !== "object") {
-    return false;
+    return undefined;
   }
+
   const record = value as Record<string, unknown>;
   const options = record.options ?? record.choices;
-  return Array.isArray(options) && options.filter((item) => typeof item === "string" && item.trim().length > 0).length >= 2;
+  const normalizedNestedOptions = normalizeQuestionOptions(options);
+  if (normalizedNestedOptions) {
+    return normalizedNestedOptions;
+  }
+
+  const keyedOptions = Object.entries(record).flatMap(([label, item]) => normalizeOptionItem(item, label));
+  return keyedOptions.length >= 2 ? keyedOptions : undefined;
+}
+
+function normalizeOptionItem(value: unknown, fallbackLabel?: string): string[] {
+  if (typeof value === "string") {
+    const text = value.trim();
+    return text.length > 0 ? [formatOptionText(fallbackLabel, text)] : [];
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+
+  const record = value as Record<string, unknown>;
+  const text = stringOptionValue(record.text) ?? stringOptionValue(record.value) ?? stringOptionValue(record.label);
+  if (!text) {
+    return [];
+  }
+  return [formatOptionText(stringOptionValue(record.label) ?? stringOptionValue(record.code) ?? fallbackLabel, text)];
+}
+
+function stringOptionValue(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function formatOptionText(label: string | undefined, text: string) {
+  const normalizedLabel = label?.trim().replace(/^\((.*)\)$/u, "$1");
+  if (!normalizedLabel || normalizedLabel === text) {
+    return text;
+  }
+  return `(${normalizedLabel}) ${text}`;
 }
 
 function nonEmptyOptional(value: string | undefined) {
