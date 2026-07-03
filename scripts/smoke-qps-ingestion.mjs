@@ -14,6 +14,7 @@ const filePattern = process.env.QUEANS_SMOKE_FILE_PATTERN ? new RegExp(process.e
 const resetDb = args.has("--reset-db");
 const autoApproveReview = args.has("--auto-approve-review");
 const autoResolveBlockedReview = args.has("--auto-resolve-blocked-review");
+const sequential = args.has("--sequential");
 
 if (resetDb) {
   run("pnpm", ["--filter", "@queans/db", "exec", "tsx", "src/run-prisma.ts", "migrate", "reset", "--schema", "prisma/schema.prisma", "--force"]);
@@ -33,6 +34,70 @@ if (files.length === 0) {
 
 const runs = [];
 for (const fileName of files) {
+  const run = await uploadPaper(fileName);
+  runs.push(run);
+  if (sequential) {
+    await waitForRunsToComplete([run], Date.now() + timeoutMs);
+  }
+}
+
+if (!sequential) {
+  await waitForRunsToComplete(runs, Date.now() + timeoutMs);
+}
+
+const finalStatuses = await Promise.all(runs.map((run) => ingestionStatus(run)));
+const incomplete = finalStatuses.filter((status) => status.status !== "COMPLETED");
+const reviewTasks = await apiGet("/api/review/tasks");
+const questions = await apiGet("/api/questions");
+const ingestedFileNames = new Set(runs.map((run) => run.fileName));
+const visibleQuestions = questions.questions.filter((question) => ingestedFileNames.has(question.sourcePaper?.sourceFileName));
+const visibleQuestionsByPaper = runs.map((run) => {
+  const paperQuestions = visibleQuestions.filter((question) => question.sourcePaper?.sourceFileName === run.fileName);
+  return {
+    fileName: run.fileName,
+    visibleQuestions: paperQuestions.length,
+    groupedQuestionParts: paperQuestions.filter((question) => question.parentQuestionNumber && question.partLabel).length
+  };
+});
+
+console.log(
+  JSON.stringify(
+    {
+      uploadedPapers: runs.length,
+      completedRuns: finalStatuses.filter((status) => status.status === "COMPLETED").length,
+      openReviewItems: reviewTasks.reviewItems.length,
+      visibleQuestions: visibleQuestions.length,
+      groupedQuestionParts: visibleQuestions.filter((question) => question.parentQuestionNumber && question.partLabel).length,
+      visibleQuestionsByPaper
+    },
+    null,
+    2
+  )
+);
+
+if (incomplete.length > 0) {
+  throw new Error(`Timed out before all ingestions completed: ${incomplete.map((status) => `${status.fileName}:${status.status}`).join(", ")}`);
+}
+if (reviewTasks.reviewItems.length > 0) {
+  throw new Error(
+    `Smoke run still has ${reviewTasks.reviewItems.length} open review item(s). Re-run with --auto-approve-review --auto-resolve-blocked-review only for local test data.`
+  );
+}
+if (visibleQuestions.length === 0) {
+  throw new Error("Smoke run completed but no approved questions from qps/ are visible through /api/questions.");
+}
+if (visibleQuestionsByPaper.some((paper) => paper.visibleQuestions === 0)) {
+  throw new Error(
+    `Smoke run completed but some uploaded papers have no approved questions visible through /api/questions: ${visibleQuestionsByPaper
+      .filter((paper) => paper.visibleQuestions === 0)
+      .map((paper) => paper.fileName)
+      .join(", ")}`
+  );
+}
+
+console.log("qps smoke ingestion passed.");
+
+async function uploadPaper(fileName) {
   const filePath = join(qpsDir.pathname, fileName);
   const file = await readFile(filePath);
   const fileStat = await stat(filePath);
@@ -64,78 +129,59 @@ for (const fileName of files) {
     etag: putResponse.headers.get("etag") ?? undefined,
     paperContext: paperContextFromFileName(fileName)
   });
-  runs.push({
+  return {
     fileName,
     sourcePaperId: completed.sourcePaperId,
     ingestionRunId: completed.ingestionRunId
-  });
+  };
 }
 
-const deadline = Date.now() + timeoutMs;
-while (Date.now() < deadline) {
-  const statuses = await Promise.all(runs.map((run) => ingestionStatus(run)));
-  printStatus(statuses);
+async function waitForRunsToComplete(waitRuns, deadline) {
+  while (Date.now() < deadline) {
+    const statuses = await Promise.all(waitRuns.map((run) => ingestionStatus(run)));
+    printStatus(statuses);
 
-  const failed = statuses.filter((status) => status.status === "FAILED" || status.status === "CANCELLED");
-  if (failed.length > 0) {
-    throw new Error(`Ingestion failed: ${failed.map((status) => `${status.fileName}:${status.status}:${status.currentStep}`).join(", ")}`);
+    const failed = statuses.filter((status) => status.status === "FAILED" || status.status === "CANCELLED");
+    if (failed.length > 0) {
+      throw new Error(`Ingestion failed: ${failed.map((status) => `${status.fileName}:${status.status}:${status.currentStep}`).join(", ")}`);
+    }
+
+    const waitingForReview = statuses.filter((status) => status.status === "WAITING_FOR_REVIEW");
+    if (waitingForReview.length > 0 && autoApproveReview) {
+      const reviewResolution = await resolveOpenReviewItems();
+      console.log(
+        `Auto-approved ${reviewResolution.approved} open review item(s); marked ${reviewResolution.markedUnprocessable} blocker(s) unprocessable; ${reviewResolution.blocked} still blocked.`
+      );
+    }
+
+    if (statuses.every((status) => status.status === "COMPLETED")) {
+      return;
+    }
+
+    await sleep(pollIntervalMs);
   }
 
-  const waitingForReview = statuses.filter((status) => status.status === "WAITING_FOR_REVIEW");
-  if (waitingForReview.length > 0 && autoApproveReview) {
-    const reviewResolution = await resolveOpenReviewItems();
-    console.log(
-      `Auto-approved ${reviewResolution.approved} open review item(s); marked ${reviewResolution.markedUnprocessable} blocker(s) unprocessable; ${reviewResolution.blocked} still blocked.`
-    );
-  }
-
-  if (statuses.every((status) => status.status === "COMPLETED")) {
-    break;
-  }
-
-  await sleep(pollIntervalMs);
+  const finalStatuses = await Promise.all(waitRuns.map((run) => ingestionStatus(run)));
+  throw new Error(`Timed out before ingestions completed: ${finalStatuses.map((status) => `${status.fileName}:${status.status}`).join(", ")}`);
 }
-
-const finalStatuses = await Promise.all(runs.map((run) => ingestionStatus(run)));
-const incomplete = finalStatuses.filter((status) => status.status !== "COMPLETED");
-const reviewTasks = await apiGet("/api/review/tasks");
-const questions = await apiGet("/api/questions");
-const ingestedFileNames = new Set(runs.map((run) => run.fileName));
-const visibleQuestions = questions.questions.filter((question) => ingestedFileNames.has(question.sourcePaper?.sourceFileName));
-
-console.log(
-  JSON.stringify(
-    {
-      uploadedPapers: runs.length,
-      completedRuns: finalStatuses.filter((status) => status.status === "COMPLETED").length,
-      openReviewItems: reviewTasks.reviewItems.length,
-      visibleQuestions: visibleQuestions.length,
-      groupedQuestionParts: visibleQuestions.filter((question) => question.parentQuestionNumber && question.partLabel).length
-    },
-    null,
-    2
-  )
-);
-
-if (incomplete.length > 0) {
-  throw new Error(`Timed out before all ingestions completed: ${incomplete.map((status) => `${status.fileName}:${status.status}`).join(", ")}`);
-}
-if (reviewTasks.reviewItems.length > 0) {
-  throw new Error(
-    `Smoke run still has ${reviewTasks.reviewItems.length} open review item(s). Re-run with --auto-approve-review --auto-resolve-blocked-review only for local test data.`
-  );
-}
-if (visibleQuestions.length === 0) {
-  throw new Error("Smoke run completed but no approved questions from qps/ are visible through /api/questions.");
-}
-
-console.log("qps smoke ingestion passed.");
 
 async function assertApiReady() {
-  const ready = await fetch(`${apiUrl}/ready`);
-  if (!ready.ok) {
-    throw new Error(`API is not ready at ${apiUrl}/ready: ${ready.status} ${await ready.text()}`);
+  const deadline = Date.now() + 60_000;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      const ready = await fetch(`${apiUrl}/ready`);
+      if (ready.ok) {
+        return;
+      }
+      lastError = new Error(`API is not ready at ${apiUrl}/ready: ${ready.status} ${await ready.text()}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(1_000);
   }
+
+  throw lastError ?? new Error(`API did not become ready at ${apiUrl}/ready`);
 }
 
 async function ingestionStatus(run) {

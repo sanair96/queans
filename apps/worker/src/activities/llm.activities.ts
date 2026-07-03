@@ -143,7 +143,8 @@ export async function submitSolvingBatch(input: PaperIngestionWorkflowInput) {
     where: {
       sourcePaperId: input.sourcePaperId,
       approvedQuestionId: null,
-      reviewStatus: { in: [CandidateStatus.EXTRACTED, CandidateStatus.NEEDS_REVIEW] }
+      reviewStatus: { in: [CandidateStatus.EXTRACTED, CandidateStatus.NEEDS_REVIEW] },
+      answerText: null
     },
     orderBy: [{ sourcePageStart: "asc" }, { pageNumber: "asc" }, { questionNumber: "asc" }, { createdAt: "asc" }]
   });
@@ -337,39 +338,48 @@ export async function extractQuestionsAndPersist(input: PaperIngestionWorkflowIn
 }
 
 export async function solveQuestionsAndPersist(input: PaperIngestionWorkflowInput) {
-  const candidates = await prisma.questionCandidate.findMany({
-    where: {
-      sourcePaperId: input.sourcePaperId,
-      approvedQuestionId: null,
-      reviewStatus: { in: [CandidateStatus.EXTRACTED, CandidateStatus.NEEDS_REVIEW] }
-    },
-    orderBy: [{ sourcePageStart: "asc" }, { pageNumber: "asc" }, { questionNumber: "asc" }, { createdAt: "asc" }]
-  });
+  const extractor = createQuestionExtractorFromEnv(process.env);
+  const objectStore = new R2ObjectStore(loadR2ConfigFromEnv(process.env));
+  const solverRequestIntervalMs = solverRequestIntervalFromEnv(process.env);
+  const solverConcurrency = solverConcurrencyFromEnv(process.env);
+  let candidatesSubmitted = 0;
+  let candidatesSolved = 0;
+  let candidatesFailed = 0;
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let model: string | undefined;
 
-  if (candidates.length === 0) {
+  for (let pass = 0; pass < 3; pass += 1) {
+    const candidates = await unsolvedQuestionCandidates(input.sourcePaperId);
+    if (candidates.length === 0) {
+      break;
+    }
+
+    const outcomes = await mapWithConcurrency(candidates, solverConcurrency, async (candidate, index) =>
+      solveCandidateAndPersist({
+        extractor,
+        objectStore,
+        candidate,
+        delayMs: solverConcurrency === 1 && index > 0 ? solverRequestIntervalMs : 0
+      })
+    );
+    candidatesSubmitted += candidates.length;
+    candidatesSolved += outcomes.filter((outcome) => outcome.solved).length;
+    candidatesFailed += outcomes.filter((outcome) => !outcome.solved).length;
+    promptTokens += outcomes.reduce((total, outcome) => total + (outcome.promptTokens ?? 0), 0);
+    completionTokens += outcomes.reduce((total, outcome) => total + (outcome.completionTokens ?? 0), 0);
+    model ??= outcomes.find((outcome) => outcome.model)?.model;
+    if (!outcomes.some((outcome) => outcome.splitCreated)) {
+      break;
+    }
+  }
+
+  if (candidatesSubmitted === 0) {
     return {
       skipped: true,
       reason: "NO_CANDIDATES_TO_SOLVE"
     };
   }
-
-  const extractor = createQuestionExtractorFromEnv(process.env);
-  const objectStore = new R2ObjectStore(loadR2ConfigFromEnv(process.env));
-  const solverRequestIntervalMs = solverRequestIntervalFromEnv(process.env);
-  const solverConcurrency = solverConcurrencyFromEnv(process.env);
-  const outcomes = await mapWithConcurrency(candidates, solverConcurrency, async (candidate, index) =>
-    solveCandidateAndPersist({
-      extractor,
-      objectStore,
-      candidate,
-      delayMs: solverConcurrency === 1 && index > 0 ? solverRequestIntervalMs : 0
-    })
-  );
-  const candidatesSolved = outcomes.filter((outcome) => outcome.solved).length;
-  const candidatesFailed = outcomes.length - candidatesSolved;
-  const promptTokens = outcomes.reduce((total, outcome) => total + (outcome.promptTokens ?? 0), 0);
-  const completionTokens = outcomes.reduce((total, outcome) => total + (outcome.completionTokens ?? 0), 0);
-  const model = outcomes.find((outcome) => outcome.model)?.model;
 
   const usage = {
     promptTokens,
@@ -384,7 +394,7 @@ export async function solveQuestionsAndPersist(input: PaperIngestionWorkflowInpu
     usage,
     batchMetadata: {
       synchronous: true,
-      candidatesSubmitted: candidates.length,
+      candidatesSubmitted,
       candidatesSolved,
       candidatesFailed,
       solverConcurrency
@@ -392,11 +402,25 @@ export async function solveQuestionsAndPersist(input: PaperIngestionWorkflowInpu
   });
 
   return {
-    candidatesSubmitted: candidates.length,
+    candidatesSubmitted,
     candidatesSolved,
     candidatesFailed,
     model: model ?? config.solverModel
   };
+}
+
+function unsolvedQuestionCandidates(sourcePaperId: string) {
+  return prisma.questionCandidate.findMany({
+    where: {
+      sourcePaperId,
+      approvedQuestionId: null,
+      reviewStatus: { in: [CandidateStatus.EXTRACTED, CandidateStatus.NEEDS_REVIEW] },
+      answerText: null
+    },
+    orderBy: [{ sourcePageStart: "asc" }, { pageNumber: "asc" }, { questionNumber: "asc" }, { createdAt: "asc" }]
+  }).then((candidates) =>
+    candidates.filter((candidate) => !jsonStringArray(candidate.validationErrors).includes("VALIDATION_FAILED"))
+  );
 }
 
 async function solveCandidateAndPersist(input: {
@@ -414,9 +438,10 @@ async function solveCandidateAndPersist(input: {
       candidate: candidateToExtracted(input.candidate),
       imageUrls: await signedImageUrlsForCandidate(input.candidate, input.objectStore)
     });
-    await updateSolvedCandidate(input.candidate.id, solved.candidate);
+    const splitCreated = await updateSolvedCandidate(input.candidate.id, solved.candidate);
     return {
       solved: true,
+      splitCreated,
       model: solved.model,
       promptTokens: solved.usage.promptTokens,
       completionTokens: solved.usage.completionTokens
@@ -424,7 +449,8 @@ async function solveCandidateAndPersist(input: {
   } catch (error) {
     await markCandidateSolveFailed(input.candidate.id, error);
     return {
-      solved: false
+      solved: false,
+      splitCreated: false
     };
   }
 }
@@ -436,7 +462,9 @@ async function persistExtractedCandidates(input: PaperIngestionWorkflowInput, ex
   let terminalCandidatesSkipped = 0;
 
   await prisma.$transaction(async (tx) => {
-    for (const candidate of extraction.candidates) {
+    for (const extractedCandidate of extraction.candidates) {
+      const candidates = expandExtractedCandidate(hydrateCandidateFromEvidence(extractedCandidate));
+      for (const candidate of candidates) {
       const taxonomy = await resolveCandidateTaxonomy(tx, candidate);
       const fingerprint = candidateFingerprint(candidate);
       const fieldConfidences = fieldConfidenceRows(candidate);
@@ -498,6 +526,7 @@ async function persistExtractedCandidates(input: PaperIngestionWorkflowInput, ex
       if (createdCandidate.id) {
         candidatesCreated += 1;
       }
+      }
     }
   });
 
@@ -508,6 +537,23 @@ async function persistExtractedCandidates(input: PaperIngestionWorkflowInput, ex
     committedCandidatesSkipped,
     terminalCandidatesSkipped
   };
+}
+
+function expandExtractedCandidate(candidate: ExtractedQuestionCandidate) {
+  if (isNestedDetailCandidate(candidate)) {
+    return [];
+  }
+
+  const numberedListCandidates = splitNumberedListCandidate(candidate);
+  if (numberedListCandidates.length > 0) {
+    return numberedListCandidates.flatMap((numberedCandidate) => {
+      const textSubquestionCandidates = splitTextSubquestionCandidate(numberedCandidate);
+      return textSubquestionCandidates.length > 0 ? textSubquestionCandidates : [numberedCandidate];
+    });
+  }
+
+  const textSubquestionCandidates = splitTextSubquestionCandidate(candidate);
+  return textSubquestionCandidates.length > 0 ? textSubquestionCandidates : [candidate];
 }
 
 const preservedExtractionStatuses = [
@@ -536,7 +582,7 @@ export function candidateFingerprint(candidate: ExtractedQuestionCandidate) {
     sourcePageEnd,
     normalizeFingerprintPart(candidate.sectionName),
     normalizeFingerprintPart(candidate.questionNumber),
-    normalizeFingerprintPart(candidate.cleanedQuestionText)
+    candidate.questionNumber ? null : normalizeFingerprintPart(candidate.cleanedQuestionText)
   ];
 
   return createHash("sha256").update(JSON.stringify(fingerprintBasis)).digest("hex");
@@ -547,18 +593,20 @@ function normalizeFingerprintPart(value: string | undefined) {
 }
 
 async function updateSolvedCandidate(candidateId: string, candidate: ExtractedQuestionCandidate) {
-  await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     const existing = await tx.questionCandidate.findUnique({
       where: { id: candidateId }
     });
 
     if (!existing || shouldSkipExistingCandidateForExtraction(existing)) {
-      return;
+      return false;
     }
 
-    const mergedCandidate = mergeSolvedCandidate(candidateToExtracted(existing), candidate);
-    const subquestionCandidates = splitSubquestionEvidenceCandidate(mergedCandidate);
-    if (subquestionCandidates.length > 0) {
+    const mergedCandidate = hydrateCandidateFromEvidence(mergeSolvedCandidate(candidateToExtracted(existing), candidate));
+    const evidenceSubquestionCandidates = splitSubquestionEvidenceCandidate(mergedCandidate);
+    const splitCandidates =
+      evidenceSubquestionCandidates.length > 0 ? evidenceSubquestionCandidates : splitTextSubquestionCandidate(mergedCandidate);
+    if (splitCandidates.length > 0) {
       await tx.questionCandidate.update({
         where: { id: candidateId },
         data: {
@@ -567,10 +615,10 @@ async function updateSolvedCandidate(candidateId: string, candidate: ExtractedQu
           extractedPayload: toInputJson(mergedCandidate)
         }
       });
-      for (const subquestionCandidate of subquestionCandidates) {
+      for (const subquestionCandidate of splitCandidates) {
         await upsertSolvedSubquestionCandidate(tx, existing.sourcePaperId, subquestionCandidate);
       }
-      return;
+      return true;
     }
 
     const taxonomy = await resolveCandidateTaxonomy(tx, mergedCandidate);
@@ -580,6 +628,7 @@ async function updateSolvedCandidate(candidateId: string, candidate: ExtractedQu
       data: candidatePersistenceData(mergedCandidate, taxonomy)
     });
     await replaceFieldConfidences(tx, candidateId, fieldConfidences);
+    return false;
   });
 }
 
@@ -644,12 +693,12 @@ async function upsertSolvedSubquestionCandidate(
 
 export function splitSubquestionEvidenceCandidate(candidate: ExtractedQuestionCandidate): ExtractedQuestionCandidate[] {
   const evidence = sourceEvidenceRecord(candidate.sourceEvidence);
-  const rawSubquestions = evidence.subquestions;
+  const rawSubquestions = subquestionEvidenceItems(evidence);
   if (!Array.isArray(rawSubquestions) || rawSubquestions.length < 2) {
     return [];
   }
 
-  const parentQuestionNumber = candidate.parentQuestionNumber ?? candidate.questionNumber;
+  const parentQuestionNumber = candidate.questionNumber ?? candidate.parentQuestionNumber;
   if (!parentQuestionNumber) {
     return [];
   }
@@ -661,14 +710,19 @@ export function splitSubquestionEvidenceCandidate(candidate: ExtractedQuestionCa
 
   return rawSubquestions.flatMap((item, index) => {
     const subquestion = sourceEvidenceRecord(item);
-    const partLabel = normalizePartLabel(stringRecordValue(subquestion, "part_label"));
+    const partLabel = normalizePartLabel(stringRecordValue(subquestion, "part_label") ?? stringRecordValue(subquestion, "part"));
     const answerText = stringRecordValue(subquestion, "answer_text") ?? stringRecordValue(subquestion, "answerText");
-    const questionText = partLabel ? questionTextByPart.get(partLabel) : undefined;
+    const questionText = partLabel
+      ? questionTextByPart.get(partLabel) ??
+        stringRecordValue(subquestion, "cleaned_question_text") ??
+        stringRecordValue(subquestion, "question_text") ??
+        stringRecordValue(subquestion, "text")
+      : undefined;
     if (!partLabel || !questionText || !answerText) {
       return [];
     }
 
-    const marks = numberRecordValue(subquestion, "marks");
+    const marks = numberRecordValue(subquestion, "marks") ?? distributedSubquestionMarks(candidate.marks, rawSubquestions.length);
     const solutionText = stringRecordValue(subquestion, "solution_text") ?? stringRecordValue(subquestion, "solutionText");
     const fieldConfidence = {
       ...candidate.fieldConfidence,
@@ -711,12 +765,372 @@ export function splitSubquestionEvidenceCandidate(candidate: ExtractedQuestionCa
   });
 }
 
+export function splitTextSubquestionCandidate(candidate: ExtractedQuestionCandidate): ExtractedQuestionCandidate[] {
+  if (mapQuestionType(candidate.questionType) === QuestionType.MCQ) {
+    return [];
+  }
+
+  const romanGroupCandidates = splitRomanGroupCandidate(candidate);
+  if (romanGroupCandidates.length > 0) {
+    return romanGroupCandidates;
+  }
+
+  const evidence = sourceEvidenceRecord(candidate.sourceEvidence);
+  const sourceEvidenceText = stringRecordValue(evidence, "source_evidence_text");
+  const questionTextByPart =
+    firstSubquestionTextByPart(candidate.cleanedQuestionText, candidate.rawOcrText, sourceEvidenceText);
+  if (questionTextByPart.size < 2) {
+    return [];
+  }
+
+  const parentQuestionNumber = candidate.partLabel
+    ? candidate.parentQuestionNumber ?? candidate.questionNumber
+    : candidate.questionNumber ?? candidate.parentQuestionNumber;
+  if (!parentQuestionNumber) {
+    return [];
+  }
+
+  const partCount = questionTextByPart.size;
+  const stemText = candidate.stemText ?? textBeforeFirstSubquestion(candidate.cleanedQuestionText);
+  const groupKey = candidate.groupKey ?? `${candidate.sectionName ?? "question"}:${parentQuestionNumber}`;
+  const questionLabel = candidate.questionLabel ?? `Question ${parentQuestionNumber}`;
+  const evidenceMarks = numberRecordValue(sourceEvidenceRecord(candidate.sourceEvidence), "marks");
+  const marksByPart = allocatedMarksForParts(candidate, partCount);
+  const distributedMarks = distributedSubquestionMarks(evidenceMarks ?? candidate.marks, partCount);
+  const marks = marksByPart?.[0] ?? distributedMarks;
+  const fieldConfidence = {
+    ...candidate.fieldConfidence,
+    marks: Math.max(candidate.fieldConfidence.marks ?? 0, marks === undefined ? 0 : 0.9)
+  };
+
+  return Array.from(questionTextByPart.entries()).map(([partLabel, questionText], index) => ({
+    ...candidate,
+    questionNumber: `${parentQuestionNumber}(${partLabel})`,
+    parentQuestionNumber,
+    questionLabel,
+    partLabel,
+    groupKey,
+    stemText,
+    displayOrder: (candidate.displayOrder ?? 0) + index,
+    cleanedQuestionText: questionText,
+    rawOcrText: `${stemText}\n(${partLabel}) ${questionText}`,
+    marks: marksByPart?.[index] ?? distributedMarks,
+    fieldConfidence,
+    validationErrors: reconcileMergedValidationErrors({
+      ...candidate,
+      marks: marksByPart?.[index] ?? distributedMarks,
+      fieldConfidence,
+      validationErrors: candidate.answerText ? candidate.validationErrors : [...candidate.validationErrors, "ANSWER_UNCERTAIN"]
+    }),
+    sourceEvidence: {
+      ...sourceEvidenceRecord(candidate.sourceEvidence),
+      parent_marks: candidate.marks,
+      part_label: partLabel
+    }
+  }));
+}
+
+export function splitNumberedListCandidate(candidate: ExtractedQuestionCandidate): ExtractedQuestionCandidate[] {
+  if (
+    candidate.parentQuestionNumber ||
+    candidate.partLabel ||
+    mapQuestionType(candidate.questionType) === QuestionType.MCQ
+  ) {
+    return [];
+  }
+
+  const questionTextByNumber = numberedQuestionTextByPart(candidate.cleanedQuestionText);
+  if (questionTextByNumber.size < 2) {
+    return [];
+  }
+
+  const firstNumber = questionTextByNumber.keys().next().value;
+  if (candidate.questionNumber && firstNumber && candidate.questionNumber !== firstNumber) {
+    return [];
+  }
+
+  const partCount = questionTextByNumber.size;
+  const evidence = sourceEvidenceRecord(candidate.sourceEvidence);
+  const evidenceMarks = numberRecordValue(evidence, "marks");
+  const marksByPart = allocatedMarksForParts(candidate, partCount);
+  if (
+    !marksByPart &&
+    candidate.questionNumber &&
+    (candidate.marks ?? 0) <= 1 &&
+    !looksLikeSectionTotalMarks({
+      evidenceMarks,
+      evidenceQuestionNumber: candidate.questionNumber,
+      sectionName: candidate.sectionName
+    })
+  ) {
+    return [];
+  }
+  const distributedMarks = distributedSubquestionMarks(evidenceMarks ?? candidate.marks, partCount);
+  const marks = marksByPart?.[0] ?? distributedMarks;
+  const fieldConfidence = {
+    ...candidate.fieldConfidence,
+    marks: Math.max(candidate.fieldConfidence.marks ?? 0, marks === undefined ? 0 : 0.9)
+  };
+
+  return Array.from(questionTextByNumber.entries()).map(([questionNumber, questionText], index) => {
+    const candidateMarks = marksByPart?.[index] ?? distributedMarks;
+    return {
+      ...candidate,
+      questionNumber,
+      parentQuestionNumber: undefined,
+      questionLabel: `Question ${questionNumber}`,
+      partLabel: undefined,
+      groupKey: undefined,
+      stemText: undefined,
+      displayOrder: (candidate.displayOrder ?? 0) + index,
+      cleanedQuestionText: questionText,
+      rawOcrText: `${questionNumber}. ${questionText}`,
+      marks: candidateMarks,
+      fieldConfidence,
+      validationErrors: reconcileMergedValidationErrors({
+        ...candidate,
+        marks: candidateMarks,
+        fieldConfidence,
+        validationErrors: candidate.answerText ? candidate.validationErrors : [...candidate.validationErrors, "ANSWER_UNCERTAIN"]
+      }),
+      sourceEvidence: {
+        ...sourceEvidenceRecord(candidate.sourceEvidence),
+        parent_marks: candidate.marks,
+        question_number: questionNumber
+      }
+    };
+  });
+}
+
+function splitRomanGroupCandidate(candidate: ExtractedQuestionCandidate): ExtractedQuestionCandidate[] {
+  const parentQuestionNumber = candidate.questionNumber ?? candidate.parentQuestionNumber ?? candidate.sectionName;
+  if (!parentQuestionNumber) {
+    return [];
+  }
+
+  const romanGroups = romanGroupTextByPart(candidate.cleanedQuestionText);
+  if (romanGroups.size < 2) {
+    return [];
+  }
+
+  return Array.from(romanGroups.entries()).map(([romanLabel, group], index) => {
+    const questionNumber = `${parentQuestionNumber}.${romanLabel}`;
+    const marks = group.marks ?? distributedSubquestionMarks(candidate.marks, romanGroups.size);
+    const fieldConfidence = {
+      ...candidate.fieldConfidence,
+      marks: Math.max(candidate.fieldConfidence.marks ?? 0, marks === undefined ? 0 : 0.9)
+    };
+
+    return {
+      ...candidate,
+      questionNumber,
+      parentQuestionNumber,
+      questionLabel: romanLabel,
+      partLabel: undefined,
+      groupKey: questionNumber,
+      stemText: textBeforeFirstSubquestion(group.text),
+      displayOrder: (candidate.displayOrder ?? 0) + index,
+      cleanedQuestionText: group.text,
+      rawOcrText: group.text,
+      marks,
+      fieldConfidence,
+      validationErrors: reconcileMergedValidationErrors({
+        ...candidate,
+        marks,
+        fieldConfidence,
+        validationErrors: candidate.answerText ? candidate.validationErrors : [...candidate.validationErrors, "ANSWER_UNCERTAIN"]
+      }),
+      sourceEvidence: {
+        ...sourceEvidenceRecord(candidate.sourceEvidence),
+        parent_marks: candidate.marks,
+        roman_label: romanLabel
+      }
+    };
+  });
+}
+
+function subquestionEvidenceItems(evidence: Record<string, unknown>) {
+  const rawItems = evidence.subquestions ?? evidence.sub_questions ?? evidence.subparts ?? evidence.parts;
+  return Array.isArray(rawItems) ? rawItems : undefined;
+}
+
+function hydrateCandidateFromEvidence(candidate: ExtractedQuestionCandidate): ExtractedQuestionCandidate {
+  const evidence = sourceEvidenceRecord(candidate.sourceEvidence);
+  const evidenceTextIdentity = questionIdentityFromEvidenceText(stringRecordValue(evidence, "source_evidence_text"));
+  const sectionName = nonEmptySolvedValue(candidate.sectionName, stringRecordValue(evidence, "section_name"));
+  const evidenceQuestionNumber = stringRecordValue(evidence, "question_number") ?? evidenceTextIdentity.questionNumber;
+  const questionNumber = nonEmptySolvedValue(candidate.questionNumber, evidenceQuestionNumber);
+  const marks = candidate.marks ?? normalizedEvidenceMarks(candidate, {
+    evidenceMarks:
+      numberRecordValue(evidence, "marks") ?? evidenceTextIdentity.marks ?? defaultMarksForCandidate(candidate, questionNumber),
+    evidenceQuestionNumber,
+    sectionName
+  });
+  const parentQuestionNumber = nonEmptySolvedValue(
+    candidate.parentQuestionNumber,
+    stringRecordValue(evidence, "parent_question_number")
+  );
+  const partLabel = nonEmptySolvedValue(candidate.partLabel, stringRecordValue(evidence, "part_label"));
+  const normalizedQuestionNumber = normalizedGroupedQuestionNumber({
+    questionNumber,
+    parentQuestionNumber,
+    partLabel
+  });
+  const groupKey = nonEmptySolvedValue(candidate.groupKey, stringRecordValue(evidence, "group_key"));
+  const displayOrder = candidate.displayOrder ?? numberRecordValue(evidence, "display_order");
+  const pageNumber = candidate.pageNumber ?? numberRecordValue(evidence, "page_number");
+  const fieldConfidence = {
+    ...candidate.fieldConfidence,
+    marks: Math.max(candidate.fieldConfidence.marks ?? 0, marks === undefined ? 0 : 0.9)
+  };
+  const hydrated = {
+    ...candidate,
+    questionNumber: normalizedQuestionNumber,
+    parentQuestionNumber,
+    questionLabel: normalizedQuestionLabel({
+      solvedQuestionLabel: candidate.questionLabel,
+      existingQuestionLabel: undefined,
+      parentQuestionNumber,
+      partLabel
+    }),
+    partLabel,
+    groupKey,
+    sectionName,
+    pageNumber,
+    displayOrder,
+    marks,
+    fieldConfidence
+  };
+
+  return {
+    ...hydrated,
+    validationErrors: reconcileMergedValidationErrors(hydrated)
+  };
+}
+
+function normalizedGroupedQuestionNumber(input: {
+  questionNumber: string | undefined;
+  parentQuestionNumber: string | undefined;
+  partLabel: string | undefined;
+}) {
+  const partLabel = normalizePartLabel(input.partLabel);
+  if (input.parentQuestionNumber && partLabel) {
+    return `${input.parentQuestionNumber}(${partLabel})`;
+  }
+
+  const compactPartMatch = /^(\d+)([a-h])$/iu.exec(input.questionNumber ?? "");
+  if (compactPartMatch?.[1] && compactPartMatch[2]) {
+    return `${compactPartMatch[1]}(${compactPartMatch[2].toLowerCase()})`;
+  }
+
+  return input.questionNumber;
+}
+
+function isNestedDetailCandidate(candidate: ExtractedQuestionCandidate) {
+  const partLabel = candidate.partLabel ?? stringRecordValue(sourceEvidenceRecord(candidate.sourceEvidence), "part_label");
+  return Boolean(candidate.parentQuestionNumber && /^[a-h]\.(?:i{1,3}|iv|v)$/iu.test(partLabel ?? ""));
+}
+
+export function questionIdentityFromEvidenceText(text: string | undefined) {
+  if (!text) {
+    return {};
+  }
+
+  const normalizedText = text.replace(/^\s*#+\s*/u, "").trim();
+  const romanSectionMatch = /^\s*([IVX]+)\.?\s+(?:(i{1,3}|iv|v|vi{0,3}|ix|x)[.)]?)?/iu.exec(normalizedText);
+  const romanSectionWithLineBreakMatch = /^\s*([IVX]+)\s*\n+\s*(i{1,3}|iv|v|vi{0,3}|ix|x)[.)]/iu.exec(normalizedText);
+  const romanOnlyMatch = /^\s*(i{1,3}|iv|v|vi{0,3}|ix|x)[.)]/iu.exec(normalizedText);
+  const numericMatch = /^\s*(\d{1,2})[.)]\s+/u.exec(normalizedText);
+  const romanSection = romanSectionWithLineBreakMatch?.[1] ?? romanSectionMatch?.[1];
+  const romanPart = romanSectionWithLineBreakMatch?.[2] ?? romanSectionMatch?.[2];
+  const questionNumber =
+    romanSection && romanPart
+      ? `${romanSection.toUpperCase()}.${romanPart.toLowerCase()}`
+      : romanSection
+        ? romanSection.toUpperCase()
+        : romanOnlyMatch?.[1]?.toLowerCase() ?? numericMatch?.[1];
+
+  return {
+    questionNumber,
+    marks: inlineMarksFromEvidenceText(normalizedText)
+  };
+}
+
+function inlineMarksFromEvidenceText(text: string) {
+  const allocation = markAllocationFromText(text);
+  if (allocation) {
+    return allocation.reduce((total, mark) => total + mark, 0);
+  }
+
+  const marks = Array.from(text.matchAll(/\((\d+(?:\.\d+)?)\s*(?:marks?)?\)/giu))
+    .map((match) => Number(match[1]))
+    .filter((value) => Number.isFinite(value));
+  return marks.length > 0 ? marks[0] : undefined;
+}
+
+function defaultMarksForCandidate(candidate: ExtractedQuestionCandidate, questionNumber: string | undefined) {
+  if (questionNumber && mapQuestionType(candidate.questionType) === QuestionType.MCQ) {
+    return 1;
+  }
+  if (candidate.partLabel && /case\s*study/iu.test(candidate.sectionName ?? "")) {
+    return 1;
+  }
+  return undefined;
+}
+
+function firstSubquestionTextByPart(...texts: Array<string | undefined>) {
+  for (const text of texts) {
+    if (!text) {
+      continue;
+    }
+    const questionTextByPart = subquestionTextByPart(text);
+    if (questionTextByPart.size >= 2) {
+      return questionTextByPart;
+    }
+  }
+
+  return new Map<string, string>();
+}
+
+function romanGroupTextByPart(text: string) {
+  const entries = new Map<string, { text: string; marks: number | undefined }>();
+  const normalizedText = text.replace(/(^|\n)\s*#\s*/gu, "$1");
+  const romanPattern =
+    /(?:^|\n)\s*(i{1,3}|iv|v|vi{0,3}|ix|x)\)\s*(?:\((\d+(?:\.\d+)?)\))?\s*([\s\S]*?)(?=\n\s*(?:i{1,3}|iv|v|vi{0,3}|ix|x)\)\s*(?:\(\d+(?:\.\d+)?\))?\s*|$)/giu;
+
+  for (const match of normalizedText.matchAll(romanPattern)) {
+    const romanLabel = match[1]?.toLowerCase();
+    const explicitMarks = match[2] ? Number(match[2]) : undefined;
+    const groupText = match[3]?.trim();
+    if (!romanLabel || !groupText) {
+      continue;
+    }
+
+    entries.set(romanLabel, {
+      text: groupText,
+      marks: explicitMarks ?? marksFromStandaloneAllocation(groupText)
+    });
+  }
+
+  return entries;
+}
+
+function marksFromStandaloneAllocation(text: string) {
+  const match = /(?:^|\n)\s*\(?(\d+(?:\.\d+)?)\)?\s*(?:\n|$)/u.exec(text);
+  if (!match?.[1]) {
+    return undefined;
+  }
+
+  const marks = Number(match[1]);
+  return Number.isFinite(marks) ? marks : undefined;
+}
+
 function mergeSolvedCandidate(
   existing: ExtractedQuestionCandidate,
   solved: ExtractedQuestionCandidate
 ): ExtractedQuestionCandidate {
   const evidence = sourceEvidenceRecord(solved.sourceEvidence);
-  const marks = solved.marks ?? numberRecordValue(evidence, "marks") ?? existing.marks;
+  const marks = existing.marks ?? solved.marks ?? numberRecordValue(evidence, "marks");
   const evidenceAnswerText = stringRecordValue(evidence, "answer_text") ?? stringRecordValue(evidence, "answerText");
   const parentQuestionNumber = nonEmptySolvedValue(
     solved.parentQuestionNumber,
@@ -820,8 +1234,13 @@ function numberRecordValue(record: Record<string, unknown>, key: string) {
 
 function subquestionTextByPart(text: string) {
   const entries = new Map<string, string>();
-  const partPattern = /\(([a-z])\)\s*([\s\S]*?)(?=\n?\([a-z]\)\s*|$)/giu;
-  for (const match of text.matchAll(partPattern)) {
+  const normalizedText = text.replace(/([^\n])\s+((?:[-*•]\s*)?\(?[a-h]\)?[.)]\s+)/giu, "$1\n$2");
+  const labelPrefixPattern = "\\s*(?:[-*•]\\s*)?";
+  const partPattern = new RegExp(
+    `(?:^|\\n)${labelPrefixPattern}\\(?([a-h])\\)?[.)]\\s*([\\s\\S]*?)(?=\\n${labelPrefixPattern}\\(?[a-h]\\)?[.)]\\s*|$)`,
+    "giu"
+  );
+  for (const match of normalizedText.matchAll(partPattern)) {
     const partLabel = normalizePartLabel(match[1]);
     const questionText = match[2]?.replace(/\(\s*\d+(?:\.\d+)?\s*marks?\s*\)\s*$/iu, "").trim();
     if (partLabel && questionText) {
@@ -831,13 +1250,103 @@ function subquestionTextByPart(text: string) {
   return entries;
 }
 
+function numberedQuestionTextByPart(text: string) {
+  const entries = new Map<string, string>();
+  const normalizedText = text.replace(/([^\n])\s+(\d{1,2}[.)]\s+)/gu, "$1\n$2");
+  const numberPattern = /(?:^|\n)\s*(\d{1,2})[.)]\s*([\s\S]*?)(?=\n\s*\d{1,2}[.)]\s*|$)/gu;
+  for (const match of normalizedText.matchAll(numberPattern)) {
+    const questionNumber = match[1];
+    const questionText = match[2]?.replace(/\(\s*\d+(?:\.\d+)?\s*marks?\s*\)\s*$/iu, "").trim();
+    if (questionNumber && questionText) {
+      entries.set(questionNumber, questionText);
+    }
+  }
+  return entries;
+}
+
 function textBeforeFirstSubquestion(text: string) {
-  return text.split(/\n?\([a-z]\)\s*/iu)[0]?.replace(/Answer the following questions?:?\s*$/iu, "").trim() ?? text;
+  return (
+    text
+      .replace(/([^\n])\s+((?:[-*•]\s*)?\(?[a-h]\)?[.)]\s+)/giu, "$1\n$2")
+      .split(/\n\s*(?:[-*•]\s*)?\(?[a-h]\)?[.)]\s*/iu)[0]
+      ?.replace(/Answer the following questions?:?\s*$/iu, "")
+      .trim() ?? text
+  );
 }
 
 function normalizePartLabel(value: string | undefined) {
   const match = /^\(?\s*([a-z])\s*\)?$/iu.exec(value ?? "");
   return match?.[1]?.toLowerCase();
+}
+
+function distributedSubquestionMarks(totalMarks: number | undefined, partCount: number) {
+  if (totalMarks === undefined || partCount <= 0) {
+    return undefined;
+  }
+
+  const distributedMarks = totalMarks / partCount;
+  return Number.isFinite(distributedMarks) ? distributedMarks : undefined;
+}
+
+function allocatedMarksForParts(candidate: ExtractedQuestionCandidate, partCount: number) {
+  const evidence = sourceEvidenceRecord(candidate.sourceEvidence);
+  const textCandidates = [
+    candidate.rawOcrText,
+    candidate.cleanedQuestionText,
+    stringRecordValue(evidence, "source_evidence_text")
+  ];
+  for (const text of textCandidates) {
+    const marks = text ? markAllocationFromText(text) : undefined;
+    if (marks?.length === partCount) {
+      return marks;
+    }
+  }
+  return undefined;
+}
+
+function markAllocationFromText(text: string) {
+  const match = /\((\s*\d+(?:\.\d+)?(?:\s*\+\s*\d+(?:\.\d+)?)+)(?:\s*=\s*\d+(?:\.\d+)?\s*marks?)?\s*\)/iu.exec(text);
+  if (!match?.[1]) {
+    return undefined;
+  }
+
+  const marks = match[1].split("+").map((value) => Number(value.trim()));
+  return marks.every((mark) => Number.isFinite(mark)) ? marks : undefined;
+}
+
+function normalizedEvidenceMarks(
+  candidate: ExtractedQuestionCandidate,
+  input: {
+    evidenceMarks: number | undefined;
+    evidenceQuestionNumber: string | undefined;
+    sectionName: string | undefined;
+  }
+) {
+  if (input.evidenceMarks === undefined) {
+    return undefined;
+  }
+
+  return looksLikeSectionTotalMarks({
+    evidenceMarks: input.evidenceMarks,
+    evidenceQuestionNumber: candidate.questionNumber ?? input.evidenceQuestionNumber,
+    sectionName: input.sectionName
+  })
+    ? 1
+    : input.evidenceMarks;
+}
+
+function looksLikeSectionTotalMarks(input: {
+  evidenceMarks: number | undefined;
+  evidenceQuestionNumber: string | undefined;
+  sectionName: string | undefined;
+}) {
+  const sectionName = input.sectionName?.toLowerCase() ?? "";
+  return Boolean(
+    input.evidenceMarks !== undefined &&
+      input.evidenceMarks >= 3 &&
+      input.evidenceQuestionNumber &&
+      /\b(mcq|fill|true|false|name the kind|state whether)\b/u.test(sectionName)
+  );
 }
 
 function reconcileMergedValidationErrors(candidate: ExtractedQuestionCandidate) {
@@ -892,18 +1401,27 @@ async function solveCandidateWithRetry(input: {
   imageUrls: Array<{ url: string; label: string }>;
 }) {
   let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
     try {
       return await input.extractor.solveCandidate(input.candidate, input.imageUrls);
     } catch (error) {
       lastError = error;
-      if (attempt < 3) {
-        await sleep(attempt * 1500);
+      if (attempt < 5) {
+        await sleep(solveRetryDelayMs(error, attempt));
       }
     }
   }
 
   throw lastError;
+}
+
+function solveRetryDelayMs(error: unknown, attempt: number) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/429|rate[_ -]?limit/i.test(message)) {
+    return attempt * 15000;
+  }
+
+  return attempt * 1500;
 }
 
 function solverRequestIntervalFromEnv(env: NodeJS.ProcessEnv) {

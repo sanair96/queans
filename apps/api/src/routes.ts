@@ -24,6 +24,10 @@ interface IdParams {
   id: string;
 }
 
+interface QuestionsQuery {
+  limit?: string;
+}
+
 export const INTERNAL_API_TOKEN_HEADER = "x-queans-internal-token";
 
 export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
@@ -591,7 +595,8 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
     return { ok: true };
   });
 
-  app.get("/api/questions", async (_request, reply) => {
+  app.get<{ Querystring: QuestionsQuery }>("/api/questions", async (request, reply) => {
+    const limit = normalizedQuestionLimit(request.query.limit);
     const questions = await prisma.question.findMany({
       where: { status: "APPROVED" },
       include: {
@@ -606,7 +611,7 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
         }
       },
       orderBy: { createdAt: "desc" },
-      take: 100
+      take: limit
     });
     const hasDiagramAssets = questions.some((question) => diagramAssetNeedsSigning(question.diagramAsset));
     const r2 = hasDiagramAssets ? getR2ObjectStoreOrReply(reply) : undefined;
@@ -625,6 +630,19 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
     await dispatchPendingWorkflowStarts(config);
     return { ok: true };
   });
+}
+
+function normalizedQuestionLimit(value: string | undefined) {
+  if (!value) {
+    return 500;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return 500;
+  }
+
+  return Math.min(parsed, 1000);
 }
 
 function getR2ObjectStoreOrReply(reply: FastifyReply) {
