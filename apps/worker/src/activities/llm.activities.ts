@@ -718,6 +718,11 @@ function mergeSolvedCandidate(
   const evidence = sourceEvidenceRecord(solved.sourceEvidence);
   const marks = solved.marks ?? numberRecordValue(evidence, "marks") ?? existing.marks;
   const evidenceAnswerText = stringRecordValue(evidence, "answer_text") ?? stringRecordValue(evidence, "answerText");
+  const parentQuestionNumber = nonEmptySolvedValue(
+    solved.parentQuestionNumber,
+    stringRecordValue(evidence, "parent_question_number") ?? existing.parentQuestionNumber
+  );
+  const partLabel = nonEmptySolvedValue(solved.partLabel, stringRecordValue(evidence, "part_label") ?? existing.partLabel);
   const answerText = nonEmptySolvedValue(
     solved.answerText,
     evidenceAnswerText ?? existing.answerText
@@ -733,12 +738,14 @@ function mergeSolvedCandidate(
     sourcePageEnd: solved.sourcePageEnd ?? existing.sourcePageEnd,
     rawOcrText: nonEmptySolvedValue(solved.rawOcrText, existing.rawOcrText),
     cleanedQuestionText: nonEmptySolvedValue(solved.cleanedQuestionText, existing.cleanedQuestionText),
-    parentQuestionNumber: nonEmptySolvedValue(
-      solved.parentQuestionNumber,
-      stringRecordValue(evidence, "parent_question_number") ?? existing.parentQuestionNumber
-    ),
-    questionLabel: nonEmptySolvedValue(solved.questionLabel, existing.questionLabel),
-    partLabel: nonEmptySolvedValue(solved.partLabel, stringRecordValue(evidence, "part_label") ?? existing.partLabel),
+    parentQuestionNumber,
+    questionLabel: normalizedQuestionLabel({
+      solvedQuestionLabel: solved.questionLabel,
+      existingQuestionLabel: existing.questionLabel,
+      parentQuestionNumber,
+      partLabel
+    }),
+    partLabel,
     groupKey: nonEmptySolvedValue(solved.groupKey, stringRecordValue(evidence, "group_key") ?? existing.groupKey),
     stemText: nonEmptySolvedValue(solved.stemText, existing.stemText),
     displayOrder: solved.displayOrder ?? existing.displayOrder,
@@ -780,6 +787,23 @@ function nonEmptySolvedValue<T extends string | undefined>(solvedValue: T, exist
   return solvedValue?.trim() ? solvedValue : existingValue;
 }
 
+function normalizedQuestionLabel(input: {
+  solvedQuestionLabel: string | undefined;
+  existingQuestionLabel: string | undefined;
+  parentQuestionNumber: string | undefined;
+  partLabel: string | undefined;
+}) {
+  const solvedLabel = input.solvedQuestionLabel?.trim();
+  const partLabel = normalizePartLabel(input.partLabel);
+  if (solvedLabel && (!partLabel || normalizePartLabel(solvedLabel) !== partLabel)) {
+    return solvedLabel;
+  }
+  if (input.existingQuestionLabel?.trim() && (!partLabel || normalizePartLabel(input.existingQuestionLabel) !== partLabel)) {
+    return input.existingQuestionLabel;
+  }
+  return input.parentQuestionNumber ? `Question ${input.parentQuestionNumber}` : input.existingQuestionLabel;
+}
+
 function sourceEvidenceRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
@@ -818,6 +842,8 @@ function normalizePartLabel(value: string | undefined) {
 
 function reconcileMergedValidationErrors(candidate: ExtractedQuestionCandidate) {
   return [...new Set(candidate.validationErrors)].filter((reason) => {
+    const answerConfidence = candidate.fieldConfidence.answer_text ?? 0;
+    const hasConfidentAnswer = Boolean(candidate.answerText?.trim()) && answerConfidence >= 0.9;
     if (reason === "MISSING_QUESTION_TEXT") {
       return candidate.cleanedQuestionText.trim().length === 0;
     }
@@ -828,8 +854,10 @@ function reconcileMergedValidationErrors(candidate: ExtractedQuestionCandidate) 
       return candidate.questionType === "MCQ" && !mergedCandidateHasMcqOptions(candidate.options);
     }
     if (reason === "ANSWER_UNCERTAIN") {
-      const answerConfidence = candidate.fieldConfidence.answer_text ?? 0;
-      return !candidate.answerText?.trim() || !candidate.answerSourceBacked || answerConfidence < 0.86;
+      return !hasConfidentAnswer;
+    }
+    if (reason === "LLM_GENERATED_ANSWER_UNVERIFIED") {
+      return !hasConfidentAnswer;
     }
     return true;
   });

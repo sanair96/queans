@@ -287,7 +287,7 @@ describe("solveQuestionsAndPersist", () => {
       candidate: {
         ...solvedCandidate,
         parentQuestionNumber: undefined,
-        questionLabel: undefined,
+        questionLabel: "a",
         partLabel: undefined,
         groupKey: undefined,
         stemText: undefined,
@@ -325,7 +325,7 @@ describe("solveQuestionsAndPersist", () => {
       marks: 1,
       options: ["Static friction", "Sliding friction", "Rolling friction", "Fluid friction"],
       answerText: "Static friction",
-      validationErrors: ["ANSWER_UNCERTAIN"]
+      validationErrors: []
     });
   });
 
@@ -387,6 +387,61 @@ describe("solveQuestionsAndPersist", () => {
       answerSourceType: "SOURCE_KEY",
       answerSourceBacked: true,
       sectionName: "Section B: Fill in the blanks (5 x 1 = 5 marks)",
+      validationErrors: []
+    });
+  });
+
+  it("does not force review for complete high-confidence generated answers", async () => {
+    mocks.prisma.questionCandidate.findMany.mockResolvedValue([
+      {
+        ...candidateRow,
+        cleanedQuestionText: "Why does the box move only after applying a certain minimum force?",
+        questionType: "SHORT_ANSWER",
+        marks: 1,
+        answerText: null,
+        validationErrors: ["LLM_GENERATED_ANSWER_UNVERIFIED", "ANSWER_UNCERTAIN"]
+      }
+    ]);
+    mocks.extractor.solveCandidate.mockResolvedValue({
+      provider: "mistral",
+      model: "mistral-large-latest",
+      candidate: {
+        ...solvedCandidate,
+        cleanedQuestionText: "Why does the box move only after applying a certain minimum force?",
+        questionType: "SHORT_ANSWER",
+        marks: 1,
+        answerText: "Because the applied force must first overcome the maximum static friction.",
+        solutionText: "Static friction balances small applied forces until its limiting value is exceeded.",
+        answerSourceType: "LLM_GENERATED",
+        answerSourceBacked: false,
+        fieldConfidence: {
+          question_text: 0.99,
+          question_type: 0.95,
+          marks: 1,
+          answer_text: 0.94
+        },
+        validationErrors: ["LLM_GENERATED_ANSWER_UNVERIFIED", "ANSWER_UNCERTAIN"]
+      },
+      rawJson: { id: "completion-1" },
+      usage: {
+        promptTokens: 1000,
+        completionTokens: 500,
+        totalTokens: 1500
+      }
+    });
+
+    await solveQuestionsAndPersist({
+      ingestionRunId: "run-1",
+      sourcePaperId: "source-1"
+    });
+
+    const updatePayload = mocks.tx.questionCandidate.update.mock.calls[0]?.[0] as
+      | { where: { id: string }; data: Record<string, unknown> }
+      | undefined;
+    expect(updatePayload?.data).toMatchObject({
+      answerText: "Because the applied force must first overcome the maximum static friction.",
+      answerSourceType: "LLM_GENERATED",
+      answerSourceBacked: false,
       validationErrors: []
     });
   });

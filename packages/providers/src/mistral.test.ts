@@ -483,6 +483,83 @@ describe("MistralQuestionExtractor", () => {
     expect(messages[1]?.content).toContain("Image assets on this page:");
     expect(messages[1]?.content).toContain("ocr-assets/source/page-1/img-1.png");
   });
+
+  it("instructs the solver to compute numerical answers and avoid unnecessary answer review flags", async () => {
+    const { MistralQuestionExtractor } = await import("./mistral.js");
+    const fetchCalls: unknown[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (_input, init) => {
+      const body = init?.body;
+      if (typeof body !== "string") {
+        throw new Error("Expected Mistral request body to be serialized JSON.");
+      }
+      fetchCalls.push(JSON.parse(body));
+      const responseBody = JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                candidate: {
+                  ...baseCandidate,
+                  answer_source_type: "LLM_GENERATED",
+                  answer_source_backed: false
+                }
+              })
+            }
+          }
+        ],
+        usage: {}
+      });
+      return Promise.resolve(
+        new Response(responseBody, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json"
+          }
+        })
+      );
+    };
+
+    try {
+      const extractor = new MistralQuestionExtractor({
+        apiKey: "test-key",
+        ocrModel: "mistral-ocr-latest",
+        extractorModel: "mistral-small-latest",
+        segmentationModel: "mistral-small-latest",
+        solverModel: "mistral-large-latest"
+      });
+
+      await extractor.solveCandidate(
+        {
+          rawOcrText:
+            "A wooden block is pressed with a force of 50 N on the ground. If the contact area is 0.25 m², calculate the pressure.",
+          cleanedQuestionText:
+            "A wooden block is pressed with a force of 50 N on the ground. If the contact area is 0.25 m², calculate the pressure.",
+          questionType: "NUMERICAL",
+          marks: 3,
+          answerSourceType: "LLM_GENERATED",
+          answerSourceBacked: false,
+          requiresDiagram: false,
+          fieldConfidence: {
+            question_text: 0.99,
+            question_type: 1,
+            marks: 1
+          },
+          overallConfidence: 0.96,
+          validationErrors: ["ANSWER_UNCERTAIN"],
+          sourceEvidence: {}
+        },
+        []
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const request = asRecord(fetchCalls[0]);
+    const messages = request.messages as Array<{ role: string; content: string }>;
+    expect(messages[0]?.content).toContain("For numerical questions, compute the answer");
+    expect(messages[0]?.content).toContain("Do not add ANSWER_UNCERTAIN or LLM_GENERATED_ANSWER_UNVERIFIED");
+  });
 });
 
 describe("MistralBatchProvider", () => {

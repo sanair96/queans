@@ -329,8 +329,12 @@ const solvingSystemPrompt = [
   "Repair incomplete OCR-grounded questions only when the source evidence supports the repair, then solve.",
   "Preserve section_name, question_number, parent_question_number, question_label, part_label, group_key, stem_text, display_order, marks, options, and diagram_asset from the candidate unless the evidence clearly improves them.",
   "Keep each subquestion as its own candidate; never merge sibling parts into one answer.",
+  "Always fill answer_text and solution_text for answerable questions that can be solved from the OCR text, attached images, or standard subject knowledge.",
+  "For numerical questions, compute the answer from the visible values, include units, and explain the formula in solution_text.",
+  "For MCQs, preserve or reconstruct the visible options and set answer_text to the correct option text or option label plus text.",
   "Use answer_source_type=SOURCE_KEY only when an answer or answer key is directly present in the OCR source; otherwise use LLM_GENERATED.",
-  "If the question, answer, marks, options, or diagram is too incomplete or uncertain, keep the uncertainty explicit with validation_errors.",
+  "Do not add ANSWER_UNCERTAIN or LLM_GENERATED_ANSWER_UNVERIFIED when answer_text is complete and field_confidence.answer_text is at least 0.9.",
+  "If the question, answer, marks, options, or diagram is too incomplete or uncertain after solving, keep the uncertainty explicit with validation_errors.",
   "Return JSON matching the schema."
 ].join(" ");
 
@@ -432,8 +436,7 @@ export class MistralBatchProvider {
         messages: [
           {
             role: "system",
-            content:
-              "Repair incomplete OCR-grounded questions only when the source evidence supports the repair, then solve. Preserve section_name, question_number, grouping fields, marks, options, and diagram_asset from the candidate unless the evidence clearly improves them. Use answer_source_type=SOURCE_KEY only when an answer or answer key is directly present in the OCR source; otherwise use LLM_GENERATED. If the question, answer, or diagram is too incomplete or uncertain, keep the uncertainty explicit with validation_errors. Return JSON matching the schema."
+            content: solvingSystemPrompt
           },
           {
             role: "user",
