@@ -5,6 +5,7 @@ import { CandidateStatus, ReviewStatus } from "@queans/db";
 import {
   answerReviewStatusForCandidate,
   candidateUpdateForReviewedItem,
+  questionCreateDataFromCandidate,
   reviewedItemToApplyWhere,
   reviewGateForConfidenceDecision,
   validationErrorsForConfidence,
@@ -142,6 +143,49 @@ describe("candidateUpdateForReviewedItem", () => {
         sourcePage: 2
       },
       reviewStatus: "EDITED_AND_APPROVED"
+    });
+  });
+});
+
+describe("questionCreateDataFromCandidate", () => {
+  it("copies grouping and per-part data into approved question rows", () => {
+    expect(
+      questionCreateDataFromCandidate({
+        cleanedQuestionText: "Which type of friction prevents the box from moving in the beginning?",
+        questionType: "SHORT_ANSWER",
+        marks: 1,
+        options: null,
+        parentQuestionNumber: "21",
+        questionLabel: "Question 21",
+        partLabel: "a",
+        groupKey: "section-d:21",
+        stemText:
+          "A boy tries to push a heavy box on the floor. Initially, he applies less force and the box does not move.",
+        displayOrder: 21,
+        chapterId: "chapter-force",
+        topicId: "topic-friction",
+        subtopicId: null,
+        difficulty: "medium",
+        bloomLevel: "understand",
+        requiresDiagram: false,
+        diagramAsset: null,
+        sourceEvidence: {
+          page: 3,
+          quote: "(a) Which type of friction prevents the box from moving in the beginning? (1 mark)"
+        }
+      })
+    ).toMatchObject({
+      questionText: "Which type of friction prevents the box from moving in the beginning?",
+      marks: 1,
+      parentQuestionNumber: "21",
+      questionLabel: "Question 21",
+      partLabel: "a",
+      groupKey: "section-d:21",
+      stemText:
+        "A boy tries to push a heavy box on the floor. Initially, he applies less force and the box does not move.",
+      displayOrder: 21,
+      topicId: "topic-friction",
+      status: "APPROVED"
     });
   });
 });

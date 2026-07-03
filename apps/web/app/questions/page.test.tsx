@@ -148,4 +148,58 @@ describe("QuestionsPage", () => {
     expect(html).toContain("Account for the following.");
     expect(html).not.toContain("2 parts");
   });
+
+  it("orders grouped parts by visible part label when display order is missing", async () => {
+    mockedApiGet.mockResolvedValue({
+      questions: [
+        {
+          id: "case-b",
+          questionText: "Which type of friction comes into play once the box starts sliding?",
+          questionType: "SHORT_ANSWER",
+          marks: 1,
+          options: null,
+          parentQuestionNumber: "21",
+          questionLabel: "Question 21",
+          partLabel: "b",
+          groupKey: "section-d:21",
+          stemText: "A boy tries to push a heavy box on the floor.",
+          displayOrder: null,
+          requiresDiagram: false,
+          diagramAsset: null,
+          sourceEvidence: {},
+          answers: [{ answerText: "Sliding friction", solutionText: null, sourceType: "LLM_GENERATED", reviewStatus: "APPROVED" }],
+          chapter: null,
+          topic: { name: "Friction" },
+          subtopic: null,
+          sourcePaper: { id: "paper-1", sourceFileName: "CLASS 8 CBSE Phy Midterm.docx", title: null }
+        },
+        {
+          id: "case-a",
+          questionText: "Which type of friction prevents the box from moving in the beginning?",
+          questionType: "SHORT_ANSWER",
+          marks: 1,
+          options: null,
+          parentQuestionNumber: "21",
+          questionLabel: "Question 21",
+          partLabel: "a",
+          groupKey: "section-d:21",
+          stemText: "A boy tries to push a heavy box on the floor.",
+          displayOrder: null,
+          requiresDiagram: false,
+          diagramAsset: null,
+          sourceEvidence: {},
+          answers: [{ answerText: "Static friction", solutionText: null, sourceType: "LLM_GENERATED", reviewStatus: "APPROVED" }],
+          chapter: null,
+          topic: { name: "Friction" },
+          subtopic: null,
+          sourcePaper: { id: "paper-1", sourceFileName: "CLASS 8 CBSE Phy Midterm.docx", title: null }
+        }
+      ]
+    });
+
+    const html = renderToStaticMarkup(await QuestionsPage());
+
+    expect(html).toContain("2 parts");
+    expect(html.indexOf("prevents the box")).toBeLessThan(html.indexOf("starts sliding"));
+  });
 });

@@ -101,6 +101,82 @@ describe("parseMistralExtractionContent", () => {
     });
   });
 
+  it("derives stable grouping metadata for real case-study style subquestions", () => {
+    const [firstPart, secondPart] = parseMistralExtractionContent(
+      JSON.stringify({
+        candidates: [
+          {
+            ...baseCandidate,
+            question_number: "21(a)",
+            parent_question_number: "21",
+            part_label: "a",
+            stem_text:
+              "A boy tries to push a heavy box on the floor. Initially, he applies less force and the box does not move.",
+            cleaned_question_text: "Which type of friction prevents the box from moving in the beginning?",
+            marks: 1,
+            answer_text: "Static friction",
+            field_confidence: {
+              question_text: 0.94,
+              question_type: 0.9,
+              marks: 0.89,
+              answer_text: 0.88
+            }
+          },
+          {
+            ...baseCandidate,
+            question_number: "21(b)",
+            parent_question_number: "21",
+            part_label: "b",
+            stem_text:
+              "A boy tries to push a heavy box on the floor. Initially, he applies less force and the box does not move.",
+            cleaned_question_text: "Which type of friction comes into play once the box starts sliding?",
+            marks: 1,
+            answer_text: "Sliding friction",
+            field_confidence: {
+              question_text: 0.94,
+              question_type: 0.9,
+              marks: 0.89,
+              answer_text: 0.88
+            }
+          }
+        ]
+      })
+    );
+
+    expect(firstPart).toMatchObject({
+      parentQuestionNumber: "21",
+      questionLabel: "Question 21",
+      partLabel: "a",
+      groupKey: "21"
+    });
+    expect(secondPart).toMatchObject({
+      parentQuestionNumber: "21",
+      questionLabel: "Question 21",
+      partLabel: "b",
+      groupKey: "21"
+    });
+  });
+
+  it("adds review-blocking validation errors for incomplete required question data", () => {
+    const [candidate] = parseMistralExtractionContent(
+      JSON.stringify({
+        candidates: [
+          {
+            ...baseCandidate,
+            question_type: "MCQ",
+            marks: undefined,
+            options: null,
+            answer_text: "   ",
+            validation_errors: []
+          }
+        ]
+      })
+    );
+
+    expect(candidate?.questionType).toBe("MCQ");
+    expect(candidate?.validationErrors).toEqual(["MISSING_MARKS", "MCQ_OPTIONS_MISSING", "ANSWER_UNCERTAIN"]);
+  });
+
   it("preserves diagram asset references", () => {
     const [candidate] = parseMistralExtractionContent(
       JSON.stringify({
@@ -210,6 +286,40 @@ describe("parseMistralExtractionContent", () => {
         })
       )
     ).toThrow("Mistral extraction response did not match the required candidate schema.");
+  });
+});
+
+describe("parseMistralOcrResult", () => {
+  it("normalizes DOCX OCR pages when Mistral returns nullable optional arrays", () => {
+    const result = parseMistralOcrResult({
+      model: "mistral-ocr-latest",
+      pages: [
+        {
+          index: 0,
+          markdown: "Section D: Case Study Based Question\\n(a) Which type of friction prevents the box from moving?",
+          images: null,
+          blocks: null,
+          dimensions: null,
+          confidence_scores: null
+        }
+      ],
+      usage_info: {
+        pages_processed: 1
+      }
+    });
+
+    expect(result.pages[0]).toMatchObject({
+      pageNumber: 1,
+      blocks: [
+        {
+          blockType: "markdown_page"
+        }
+      ],
+      images: []
+    });
+    expect(result.pages[0]?.markdown).toContain("Case Study");
+    expect(result.pages[0]?.blocks[0]?.text).toContain("Case Study");
+    expect(result.usage.pagesProcessed).toBe(1);
   });
 });
 

@@ -15,6 +15,7 @@ export interface MistralConfig {
   extractorModel: string;
   segmentationModel: string;
   solverModel: string;
+  requestTimeoutMs?: number | undefined;
 }
 
 export function loadMistralConfigFromEnv(env: NodeJS.ProcessEnv): MistralConfig {
@@ -24,7 +25,8 @@ export function loadMistralConfigFromEnv(env: NodeJS.ProcessEnv): MistralConfig 
     ocrModel: env.MISTRAL_OCR_MODEL?.trim() || "mistral-ocr-latest",
     extractorModel,
     segmentationModel: env.MISTRAL_SEGMENTATION_MODEL?.trim() || extractorModel,
-    solverModel: env.MISTRAL_SOLVER_MODEL?.trim() || "mistral-large-latest"
+    solverModel: env.MISTRAL_SOLVER_MODEL?.trim() || "mistral-large-latest",
+    requestTimeoutMs: optionalPositiveIntegerEnv(env, "MISTRAL_REQUEST_TIMEOUT_MS")
   };
 }
 
@@ -63,15 +65,16 @@ export interface MistralBatchResultLine {
 const mistralOcrPageSchema = z.object({
   index: z.number(),
   markdown: z.string(),
-  images: z.array(z.unknown()).optional(),
-  blocks: z.array(z.unknown()).optional(),
-  tables: z.array(z.unknown()).optional(),
+  images: z.array(z.unknown()).nullable().optional(),
+  blocks: z.array(z.unknown()).nullable().optional(),
+  tables: z.array(z.unknown()).nullable().optional(),
   dimensions: z
     .object({
       dpi: z.number().optional(),
       height: z.number().optional(),
       width: z.number().optional()
     })
+    .nullable()
     .optional(),
   confidence_scores: z
     .object({
@@ -289,24 +292,66 @@ const chatCompletionSchema = z.object({
       prompt_tokens: z.number().optional(),
       completion_tokens: z.number().optional(),
       total_tokens: z.number().optional()
-    })
+  })
     .optional()
 });
+
+const defaultMistralRequestTimeoutMs = 120_000;
+
+const segmentationSystemPrompt = [
+  "Segment OCR markdown into question candidates only. Do not answer or solve.",
+  "Return JSON matching the schema and use the exact snake_case field names.",
+  "Create one candidate for each answerable question or answerable sub-question.",
+  "Do not create a separate parent-only candidate when the parent only introduces subparts.",
+  "For subquestions, repeat the shared stem_text, set parent_question_number to the visible parent number, set part_label to the visible subpart label, use one stable group_key for every part in the parent group, and keep cleaned_question_text self-contained.",
+  "Preserve section_name, visible question_number, question_label, source pages, and paper order with display_order.",
+  "Infer per-part marks from explicit part marks or nearby allocation text such as '(2+3=5)', '(5 x 1 = 5 marks)', or '(2+3+2+3=10)'.",
+  "Include every visible MCQ option and diagram/image reference that the question depends on."
+].join(" ");
+
+const extractionSystemPrompt = [
+  "Extract question candidates from OCR markdown. Return only JSON matching the provided schema.",
+  "Use the exact snake_case field names from the schema.",
+  "Create one candidate per answerable item, including one candidate per answerable subquestion.",
+  "Do not create a separate parent-only candidate when the parent only introduces subparts.",
+  "Preserve section_name, visible question_number, question_label, source pages, and paper order with display_order.",
+  "For subquestions, set one stable group_key shared by every part, parent_question_number, part_label, question_label, stem_text, and display_order.",
+  "cleaned_question_text must be self-contained enough to solve without the rest of the paper, while stem_text carries the shared case/diagram/introduction.",
+  "Infer per-part marks from explicit candidate marks or section allocation text such as '(2+3=5)', '(5 x 1 = 5 marks)', and '(2+3+2+3=10)'.",
+  "field_confidence must be an object keyed by canonical field names like question_text, question_type, marks, answer_text, topic, difficulty, options, and diagram_asset; do not use schema/meta field names like validation_errors or overall_confidence as confidence keys.",
+  "Include chapter, topic, subtopic, validation_errors, source_evidence, answer_source_type, answer_source_backed, and whether diagrams are required.",
+  "If a diagram/image is needed, set requires_diagram=true and diagram_asset to the exact image asset metadata from the prompt.",
+  "validation_errors must use only the enum codes from the schema; use VALIDATION_FAILED for non-canonical extraction problems.",
+  "Use answer_source_type=SOURCE_KEY only when an answer or answer key is directly present in the OCR source; otherwise use LLM_GENERATED."
+].join(" ");
+
+const solvingSystemPrompt = [
+  "Repair incomplete OCR-grounded questions only when the source evidence supports the repair, then solve.",
+  "Preserve section_name, question_number, parent_question_number, question_label, part_label, group_key, stem_text, display_order, marks, options, and diagram_asset from the candidate unless the evidence clearly improves them.",
+  "Keep each subquestion as its own candidate; never merge sibling parts into one answer.",
+  "Use answer_source_type=SOURCE_KEY only when an answer or answer key is directly present in the OCR source; otherwise use LLM_GENERATED.",
+  "If the question, answer, marks, options, or diagram is too incomplete or uncertain, keep the uncertainty explicit with validation_errors.",
+  "Return JSON matching the schema."
+].join(" ");
 
 export class MistralOcrProvider {
   constructor(private readonly config: MistralConfig) {}
 
   async processDocumentUrl(documentUrl: string): Promise<OcrResult> {
-    const raw = await callMistral(this.config.apiKey, "/v1/ocr", {
-      model: this.config.ocrModel,
-      document: {
-        type: "document_url",
-        document_url: documentUrl
-      },
-      confidence_scores_granularity: "word",
-      table_format: "markdown",
-      include_image_base64: true
-    });
+    const raw = await callMistral(
+      this.config,
+      "/v1/ocr",
+      {
+        model: this.config.ocrModel,
+        document: {
+          type: "document_url",
+          document_url: documentUrl
+        },
+        confidence_scores_granularity: "word",
+        table_format: "markdown",
+        include_image_base64: true
+      }
+    );
     return parseMistralOcrResult(raw);
   }
 }
@@ -345,8 +390,7 @@ export class MistralBatchProvider {
         messages: [
           {
             role: "system",
-            content:
-              "Segment OCR markdown into question candidates only. Do not answer or solve. Return JSON matching the schema. Create one candidate for each answerable question or sub-question. Preserve section_name and visible question_number for every candidate. When a question has subparts, repeat the shared stem_text, set parent_question_number to the parent number, set part_label to the visible subpart label, use one shared group_key for all parts, and keep cleaned_question_text self-contained. Infer per-part marks from nearby section instructions such as '(2+3=5)', '(5 x 1 = 5 marks)', or '(2+3+2+3=10)' and put the specific candidate mark in marks. Include every visible option and diagram reference."
+            content: segmentationSystemPrompt
           },
           {
             role: "user",
@@ -404,7 +448,7 @@ export class MistralBatchProvider {
     const form = new FormData();
     form.append("purpose", "batch");
     form.append("file", new Blob([toJsonl(input.lines)], { type: "application/jsonl" }), input.fileName);
-    const raw = await callMistralForm(this.config.apiKey, "/v1/files", form);
+    const raw = await callMistralForm(this.config, "/v1/files", form);
     return mistralBatchUploadSchema.parse(raw).id;
   }
 
@@ -414,7 +458,7 @@ export class MistralBatchProvider {
     model: string;
     metadata?: Record<string, string> | undefined;
   }) {
-    const raw = await callMistral(this.config.apiKey, "/v1/batch/jobs", {
+    const raw = await callMistral(this.config, "/v1/batch/jobs", {
       input_files: [input.inputFileId],
       endpoint: input.endpoint,
       model: input.model,
@@ -424,12 +468,12 @@ export class MistralBatchProvider {
   }
 
   async retrieveBatchJob(providerJobId: string) {
-    const raw = await getMistral(this.config.apiKey, `/v1/batch/jobs/${providerJobId}`);
+    const raw = await getMistral(this.config, `/v1/batch/jobs/${providerJobId}`);
     return normalizeMistralBatchJob(raw);
   }
 
   async downloadBatchResultFile(fileId: string) {
-    const content = await getMistralText(this.config.apiKey, `/v1/files/${fileId}/content`);
+    const content = await getMistralText(this.config, `/v1/files/${fileId}/content`);
     return parseBatchResultJsonl(content);
   }
 }
@@ -438,7 +482,7 @@ export class MistralQuestionExtractor {
   constructor(private readonly config: MistralConfig) {}
 
   async extractFromPages(pages: OcrPage[]): Promise<QuestionExtractionResult> {
-    const raw = await callMistral(this.config.apiKey, "/v1/chat/completions", {
+    const raw = await callMistral(this.config, "/v1/chat/completions", {
       model: this.config.extractorModel,
       temperature: 0,
       response_format: {
@@ -450,10 +494,9 @@ export class MistralQuestionExtractor {
         }
       },
       messages: [
-          {
-            role: "system",
-            content:
-            "Extract question candidates from OCR markdown. Return only JSON matching the provided schema. Use the exact snake_case field names from the schema. Create one candidate per answerable item. Preserve section_name and visible question_number for every candidate. For subquestions, set a stable group_key shared by the parent and parts, parent_question_number, part_label, question_label, stem_text, and display_order. cleaned_question_text must be self-contained enough to solve without the rest of the paper. Infer marks from explicit candidate marks or section allocation text such as '(2+3=5)', '(5 x 1 = 5 marks)', and '(2+3+2+3=10)'. field_confidence must be an object keyed by canonical field names like question_text, question_type, marks, answer_text, topic, difficulty, options, and diagram_asset; do not use schema/meta field names like validation_errors or overall_confidence as confidence keys. Include chapter, topic, subtopic, validation_errors, source_evidence, answer_source_type, answer_source_backed, and whether diagrams are required. If a diagram/image is needed, set requires_diagram=true and diagram_asset to the exact image asset metadata from the prompt. validation_errors must use only the enum codes from the schema; use VALIDATION_FAILED for non-canonical extraction problems. Use answer_source_type=SOURCE_KEY only when an answer or answer key is directly present in the OCR source; otherwise use LLM_GENERATED."
+        {
+          role: "system",
+          content: extractionSystemPrompt
         },
         {
           role: "user",
@@ -483,7 +526,7 @@ export class MistralQuestionExtractor {
     candidate: ExtractedQuestionCandidate,
     imageUrls: Array<{ url: string; label: string }>
   ): Promise<QuestionSolvingResult> {
-    const raw = await callMistral(this.config.apiKey, "/v1/chat/completions", {
+    const raw = await callMistral(this.config, "/v1/chat/completions", {
       model: this.config.solverModel,
       temperature: 0,
       response_format: {
@@ -496,9 +539,8 @@ export class MistralQuestionExtractor {
       },
       messages: [
         {
-            role: "system",
-            content:
-            "Repair incomplete OCR-grounded questions only when the source evidence supports the repair, then solve. Preserve section_name, question_number, grouping fields, marks, options, and diagram_asset from the candidate unless the evidence clearly improves them. Use answer_source_type=SOURCE_KEY only when an answer or answer key is directly present in the OCR source; otherwise use LLM_GENERATED. If the question, answer, or diagram is too incomplete or uncertain, keep the uncertainty explicit with validation_errors. Return JSON matching the schema."
+          role: "system",
+          content: solvingSystemPrompt
         },
         {
           role: "user",
@@ -565,22 +607,29 @@ function normalizeExtractionCandidate(candidate: z.infer<typeof extractionCandid
     Object.values(candidate.field_confidence).some(isOutOfRangeConfidence);
   const diagramAsset = normalizeDiagramAssetForQuestion(candidate.cleaned_question_text, candidate.diagram_asset);
   const requiresDiagram = candidate.requires_diagram && (diagramAsset !== undefined || referencesProvidedDiagram(candidate.cleaned_question_text));
+  const grouping = normalizeGroupingFields(candidate);
+  const questionType = normalizeQuestionTypeLabel(candidate.question_type);
+  const validationErrors = normalizeValidationErrors([
+    ...candidate.validation_errors.filter((reason) => reason !== "DIAGRAM_ASSET_MISSING" || requiresDiagram),
+    ...requiredFieldValidationErrors(candidate, questionType, requiresDiagram, diagramAsset),
+    ...(invalidConfidence ? ["VALIDATION_FAILED"] : [])
+  ]);
 
   return {
-    questionNumber: nonEmptyOptional(candidate.question_number),
+    questionNumber: grouping.questionNumber,
     sectionName: nonEmptyOptional(candidate.section_name),
     pageNumber: candidate.page_number,
     sourcePageStart: candidate.source_page_start,
     sourcePageEnd: candidate.source_page_end,
     rawOcrText: candidate.raw_ocr_text,
     cleanedQuestionText: candidate.cleaned_question_text,
-    parentQuestionNumber: nonEmptyOptional(candidate.parent_question_number),
-    questionLabel: nonEmptyOptional(candidate.question_label),
-    partLabel: nonEmptyOptional(candidate.part_label),
-    groupKey: nonEmptyOptional(candidate.group_key),
-    stemText: nonEmptyOptional(candidate.stem_text),
+    parentQuestionNumber: grouping.parentQuestionNumber,
+    questionLabel: grouping.questionLabel,
+    partLabel: grouping.partLabel,
+    groupKey: grouping.groupKey,
+    stemText: grouping.stemText,
     displayOrder: candidate.display_order,
-    questionType: candidate.question_type,
+    questionType,
     marks: candidate.marks,
     options: candidate.options,
     answerText: candidate.answer_text,
@@ -596,12 +645,76 @@ function normalizeExtractionCandidate(candidate: z.infer<typeof extractionCandid
     diagramAsset,
     fieldConfidence: normalizeFieldConfidence(candidate.field_confidence),
     overallConfidence: normalizeConfidence(candidate.overall_confidence),
-    validationErrors: normalizeValidationErrors([
-      ...candidate.validation_errors.filter((reason) => reason !== "DIAGRAM_ASSET_MISSING" || requiresDiagram),
-      ...(invalidConfidence ? ["VALIDATION_FAILED"] : [])
-    ]),
+    validationErrors,
     sourceEvidence: candidate.source_evidence
   };
+}
+
+function normalizeGroupingFields(candidate: z.infer<typeof extractionCandidateSchema>) {
+  const questionNumber = nonEmptyOptional(candidate.question_number);
+  const parentQuestionNumber = nonEmptyOptional(candidate.parent_question_number);
+  const partLabel = nonEmptyOptional(candidate.part_label);
+  const stemText = nonEmptyOptional(candidate.stem_text);
+  const questionLabel =
+    nonEmptyOptional(candidate.question_label) ?? (parentQuestionNumber ? `Question ${parentQuestionNumber}` : undefined);
+  const groupKey =
+    nonEmptyOptional(candidate.group_key) ??
+    (parentQuestionNumber && (partLabel || stemText)
+      ? [candidate.section_name, parentQuestionNumber]
+          .map((part) => part?.trim().toLowerCase().replace(/\s+/g, "-"))
+          .filter(Boolean)
+          .join(":")
+      : undefined);
+
+  return {
+    questionNumber,
+    parentQuestionNumber,
+    questionLabel,
+    partLabel,
+    groupKey,
+    stemText
+  };
+}
+
+function normalizeQuestionTypeLabel(questionType: string) {
+  return questionType.trim().toUpperCase().replace(/[\s-]+/g, "_");
+}
+
+function requiredFieldValidationErrors(
+  candidate: z.infer<typeof extractionCandidateSchema>,
+  questionType: string,
+  requiresDiagram: boolean,
+  diagramAsset: unknown
+) {
+  const errors: string[] = [];
+  if (candidate.cleaned_question_text.trim().length === 0) {
+    errors.push("MISSING_QUESTION_TEXT");
+  }
+  if (candidate.marks === undefined) {
+    errors.push("MISSING_MARKS");
+  }
+  if (questionType === "MCQ" && !hasMcqOptions(candidate.options)) {
+    errors.push("MCQ_OPTIONS_MISSING");
+  }
+  if (!candidate.answer_text?.trim()) {
+    errors.push("ANSWER_UNCERTAIN");
+  }
+  if (requiresDiagram && diagramAsset === undefined) {
+    errors.push("DIAGRAM_ASSET_MISSING");
+  }
+  return errors;
+}
+
+function hasMcqOptions(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.filter((item) => typeof item === "string" && item.trim().length > 0).length >= 2;
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  const options = record.options ?? record.choices;
+  return Array.isArray(options) && options.filter((item) => typeof item === "string" && item.trim().length > 0).length >= 2;
 }
 
 function nonEmptyOptional(value: string | undefined) {
@@ -870,11 +983,11 @@ function toJsonl(lines: MistralBatchLine[]) {
   return lines.map((line) => JSON.stringify(line)).join("\\n");
 }
 
-async function callMistral(apiKey: string, path: string, body: unknown): Promise<unknown> {
-  const response = await fetch(`https://api.mistral.ai${path}`, {
+async function callMistral(config: MistralConfig, path: string, body: unknown): Promise<unknown> {
+  const response = await fetchWithTimeout(config, path, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${config.apiKey}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify(body)
@@ -888,11 +1001,11 @@ async function callMistral(apiKey: string, path: string, body: unknown): Promise
   return response.json();
 }
 
-async function callMistralForm(apiKey: string, path: string, body: FormData): Promise<unknown> {
-  const response = await fetch(`https://api.mistral.ai${path}`, {
+async function callMistralForm(config: MistralConfig, path: string, body: FormData): Promise<unknown> {
+  const response = await fetchWithTimeout(config, path, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${apiKey}`
+      Authorization: `Bearer ${config.apiKey}`
     },
     body
   });
@@ -905,11 +1018,11 @@ async function callMistralForm(apiKey: string, path: string, body: FormData): Pr
   return response.json();
 }
 
-async function getMistral(apiKey: string, path: string): Promise<unknown> {
-  const response = await fetch(`https://api.mistral.ai${path}`, {
+async function getMistral(config: MistralConfig, path: string): Promise<unknown> {
+  const response = await fetchWithTimeout(config, path, {
     method: "GET",
     headers: {
-      Authorization: `Bearer ${apiKey}`
+      Authorization: `Bearer ${config.apiKey}`
     }
   });
 
@@ -921,11 +1034,11 @@ async function getMistral(apiKey: string, path: string): Promise<unknown> {
   return response.json();
 }
 
-async function getMistralText(apiKey: string, path: string) {
-  const response = await fetch(`https://api.mistral.ai${path}`, {
+async function getMistralText(config: MistralConfig, path: string) {
+  const response = await fetchWithTimeout(config, path, {
     method: "GET",
     headers: {
-      Authorization: `Bearer ${apiKey}`
+      Authorization: `Bearer ${config.apiKey}`
     }
   });
 
@@ -943,6 +1056,38 @@ function requiredEnv(env: NodeJS.ProcessEnv, key: string) {
     throw new Error(`Missing required environment variable: ${key}`);
   }
   return value;
+}
+
+function optionalPositiveIntegerEnv(env: NodeJS.ProcessEnv, key: string) {
+  const raw = env[key]?.trim();
+  if (!raw) {
+    return undefined;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Environment variable ${key} must be a positive integer when set.`);
+  }
+  return parsed;
+}
+
+async function fetchWithTimeout(config: MistralConfig, path: string, init: RequestInit) {
+  const timeoutMs = config.requestTimeoutMs ?? defaultMistralRequestTimeoutMs;
+  try {
+    return await fetch(`https://api.mistral.ai${path}`, {
+      ...init,
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error(`Mistral request timed out after ${timeoutMs}ms: ${path}`);
+    }
+    throw error;
+  }
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === "TimeoutError";
 }
 
 function normalizeValidationErrors(reasons: string[]) {

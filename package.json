@@ -12,6 +12,7 @@
     "dev": "pnpm --parallel --filter @queans/api --filter @queans/web --filter @queans/worker dev",
     "docker:up": "docker compose up -d app-postgres temporal-postgres temporal temporal-ui",
     "lint": "pnpm -r lint",
+    "smoke:qps": "node scripts/smoke-qps-ingestion.mjs",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck"
   },

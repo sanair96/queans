@@ -19,7 +19,7 @@ interface Question {
   chapter: { name: string } | null;
   topic: { name: string } | null;
   subtopic: { name: string } | null;
-  sourcePaper: { sourceFileName: string; title: string | null } | null;
+  sourcePaper: { id?: string; sourceFileName: string; title: string | null } | null;
 }
 
 interface QuestionGroup {
@@ -140,21 +140,86 @@ export function groupQuestions(questions: Question[]): QuestionGroup[] {
     });
   }
 
-  return [...groups.values()].map((group) => ({
-    ...group,
-    questions: [...group.questions].sort(compareQuestions)
-  }));
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      questions: [...group.questions].sort(compareQuestions)
+    }))
+    .sort(compareGroups);
 }
 
 function questionGroupKey(question: Question) {
   if (question.parentQuestionNumber && (question.partLabel || question.stemText)) {
-    return `parent:${question.sourcePaper?.sourceFileName ?? "unknown"}:${question.parentQuestionNumber}`;
+    return `parent:${question.sourcePaper?.id ?? question.sourcePaper?.sourceFileName ?? "unknown"}:${question.parentQuestionNumber}`;
   }
   return `question:${question.id}`;
 }
 
 function compareQuestions(a: Question, b: Question) {
-  return (a.displayOrder ?? Number.MAX_SAFE_INTEGER) - (b.displayOrder ?? Number.MAX_SAFE_INTEGER);
+  return (
+    compareNullableNumbers(a.displayOrder, b.displayOrder) ||
+    compareLabels(a.partLabel, b.partLabel) ||
+    compareLabels(a.questionLabel, b.questionLabel) ||
+    a.id.localeCompare(b.id)
+  );
+}
+
+function compareGroups(a: QuestionGroup, b: QuestionGroup) {
+  const firstA = a.questions[0];
+  const firstB = b.questions[0];
+  if (!firstA || !firstB) {
+    return a.key.localeCompare(b.key);
+  }
+
+  return (
+    compareLabels(firstA.sourcePaper?.sourceFileName ?? null, firstB.sourcePaper?.sourceFileName ?? null) ||
+    compareNullableNumbers(firstA.displayOrder, firstB.displayOrder) ||
+    compareLabels(firstA.parentQuestionNumber ?? firstA.questionLabel, firstB.parentQuestionNumber ?? firstB.questionLabel) ||
+    a.key.localeCompare(b.key)
+  );
+}
+
+function compareNullableNumbers(a: number | null, b: number | null) {
+  return (a ?? Number.MAX_SAFE_INTEGER) - (b ?? Number.MAX_SAFE_INTEGER);
+}
+
+function compareLabels(a: string | null, b: string | null) {
+  return labelOrder(a) - labelOrder(b) || (a ?? "").localeCompare(b ?? "");
+}
+
+function labelOrder(value: string | null) {
+  if (!value) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  const normalized = value.trim().toLowerCase().replace(/^[^\da-z]+|[^\da-z]+$/giu, "");
+  const numeric = Number.parseInt(normalized, 10);
+  if (Number.isFinite(numeric)) {
+    return numeric;
+  }
+  const roman = romanNumeralOrder(normalized);
+  if (roman !== undefined) {
+    return roman;
+  }
+  if (/^[a-z]$/u.test(normalized)) {
+    return normalized.charCodeAt(0) - "a".charCodeAt(0) + 1;
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function romanNumeralOrder(value: string) {
+  const romanValues: Record<string, number> = {
+    i: 1,
+    ii: 2,
+    iii: 3,
+    iv: 4,
+    v: 5,
+    vi: 6,
+    vii: 7,
+    viii: 8,
+    ix: 9,
+    x: 10
+  };
+  return romanValues[value];
 }
 
 function diagramImagesFromAsset(value: unknown): DiagramImage[] {

@@ -270,7 +270,7 @@ export async function createReviewItemsForCandidates(input: PaperIngestionWorkfl
         marks: {
           confidence: fieldConfidence.marks ?? 0,
           present: candidate.marks !== null,
-          required: false,
+          required: true,
           sourceBacked: true
         },
         answer_text: {
@@ -479,34 +479,21 @@ export async function commitApprovedCandidates(input: PaperIngestionWorkflowInpu
       sourcePaperId: input.sourcePaperId,
       reviewStatus: { in: ["APPROVED", "EDITED_AND_APPROVED"] },
       approvedQuestionId: null
-    }
+    },
+    orderBy: [
+      { sourcePageStart: "asc" },
+      { pageNumber: "asc" },
+      { displayOrder: "asc" },
+      { questionNumber: "asc" },
+      { createdAt: "asc" }
+    ]
   });
 
   let committed = 0;
   for (const candidate of candidates) {
     await prisma.$transaction(async (tx) => {
       const question = await tx.question.create({
-        data: {
-          questionText: candidate.cleanedQuestionText,
-          questionType: candidate.questionType,
-          marks: candidate.marks,
-          options: candidate.options === null ? Prisma.JsonNull : toInputJson(candidate.options),
-          parentQuestionNumber: candidate.parentQuestionNumber,
-          questionLabel: candidate.questionLabel,
-          partLabel: candidate.partLabel,
-          groupKey: candidate.groupKey,
-          stemText: candidate.stemText,
-          displayOrder: candidate.displayOrder,
-          chapterId: candidate.chapterId,
-          topicId: candidate.topicId,
-          subtopicId: candidate.subtopicId,
-          difficulty: candidate.difficulty,
-          bloomLevel: candidate.bloomLevel,
-          requiresDiagram: candidate.requiresDiagram,
-          diagramAsset: candidate.diagramAsset === null ? Prisma.JsonNull : toInputJson(candidate.diagramAsset),
-          status: "APPROVED",
-          sourceEvidence: toInputJson(candidate.sourceEvidence ?? {})
-        }
+        data: questionCreateDataFromCandidate(candidate)
       });
       if (candidate.answerText !== null) {
         await tx.answer.create({
@@ -529,6 +516,49 @@ export async function commitApprovedCandidates(input: PaperIngestionWorkflowInpu
   }
 
   return { questionsCommitted: committed };
+}
+
+export function questionCreateDataFromCandidate(candidate: {
+  cleanedQuestionText: string;
+  questionType: QuestionType;
+  marks: number | null;
+  options: Prisma.JsonValue | null;
+  parentQuestionNumber: string | null;
+  questionLabel: string | null;
+  partLabel: string | null;
+  groupKey: string | null;
+  stemText: string | null;
+  displayOrder: number | null;
+  chapterId: string | null;
+  topicId: string | null;
+  subtopicId: string | null;
+  difficulty: string | null;
+  bloomLevel: string | null;
+  requiresDiagram: boolean;
+  diagramAsset: Prisma.JsonValue | null;
+  sourceEvidence: Prisma.JsonValue;
+}) {
+  return {
+    questionText: candidate.cleanedQuestionText,
+    questionType: candidate.questionType,
+    marks: candidate.marks,
+    options: candidate.options === null ? Prisma.JsonNull : toInputJson(candidate.options),
+    parentQuestionNumber: candidate.parentQuestionNumber,
+    questionLabel: candidate.questionLabel,
+    partLabel: candidate.partLabel,
+    groupKey: candidate.groupKey,
+    stemText: candidate.stemText,
+    displayOrder: candidate.displayOrder,
+    chapterId: candidate.chapterId,
+    topicId: candidate.topicId,
+    subtopicId: candidate.subtopicId,
+    difficulty: candidate.difficulty,
+    bloomLevel: candidate.bloomLevel,
+    requiresDiagram: candidate.requiresDiagram,
+    diagramAsset: candidate.diagramAsset === null ? Prisma.JsonNull : toInputJson(candidate.diagramAsset),
+    status: "APPROVED",
+    sourceEvidence: toInputJson(candidate.sourceEvidence ?? {})
+  } satisfies Prisma.QuestionUncheckedCreateInput;
 }
 
 export async function markWorkflowCompleted(input: PaperIngestionWorkflowInput, outputPayload: unknown = {}) {

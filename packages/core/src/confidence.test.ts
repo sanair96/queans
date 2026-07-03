@@ -79,5 +79,19 @@ describe("evaluateCandidateConfidence", () => {
     expect(result.reviewReasons).toContain("LOW_OCR_CONFIDENCE");
     expect(result.reviewReasons).toContain("DUPLICATE_CONFLICT");
   });
-});
 
+  it("routes missing marks to review when marks are required for committed bank questions", () => {
+    const result = evaluateCandidateConfidence({
+      ocr: { averageConfidence: 0.96, minimumConfidence: 0.9 },
+      fields: {
+        ...cleanRequiredFields,
+        marks: { confidence: 0, present: false, required: true, sourceBacked: true }
+      },
+      validationErrors: []
+    });
+
+    expect(result.decision).toBe("NEEDS_REVIEW");
+    expect(result.reviewReasons).toContain("MISSING_REQUIRED_FIELD");
+    expect(result.fieldReviewReasons.marks).toEqual(["MISSING_REQUIRED_FIELD"]);
+  });
+});
