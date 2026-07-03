@@ -52,6 +52,11 @@ interface ReviewDraft {
   reviewNotes: string;
 }
 
+interface DiagramImage {
+  url: string;
+  label: string;
+}
+
 type ReviewDecision =
   | "APPROVE"
   | "EDIT_AND_APPROVE"
@@ -78,6 +83,7 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
   const [draft, setDraft] = useState<ReviewDraft>(() => draftFromItem(selected));
   const [busyDecision, setBusyDecision] = useState<ReviewDecision | null>(null);
   const [status, setStatus] = useState("");
+  const diagramImages = diagramImagesFromAsset(selected?.candidate.diagramAsset);
 
   useEffect(() => {
     setDraft(draftFromItem(selected));
@@ -234,6 +240,19 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
 
         <div className="review-columns">
           <div className="evidence-pane">
+            {diagramImages.length > 0 ? (
+              <>
+                <h3>Source images</h3>
+                <div className="diagram-grid review-diagram-grid">
+                  {diagramImages.map((image) => (
+                    <figure key={image.url} className="diagram-figure">
+                      <img src={image.url} alt={image.label} />
+                      <figcaption>{image.label}</figcaption>
+                    </figure>
+                  ))}
+                </div>
+              </>
+            ) : null}
             <h3>Source OCR</h3>
             <pre>{selected.candidate.rawOcrText}</pre>
             <h3>Evidence</h3>
@@ -503,6 +522,37 @@ function formatReasons(value: unknown) {
   }
 
   return value.filter((item): item is string => typeof item === "string");
+}
+
+function diagramImagesFromAsset(value: unknown): DiagramImage[] {
+  if (Array.isArray(value)) {
+    return value.flatMap(diagramImagesFromAsset);
+  }
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+
+  const record = value as Record<string, unknown>;
+  const current =
+    typeof record.url === "string"
+      ? [
+          {
+            url: record.url,
+            label: diagramLabel(record)
+          }
+        ]
+      : [];
+  return [...current, ...Object.values(record).flatMap(diagramImagesFromAsset)];
+}
+
+function diagramLabel(record: Record<string, unknown>) {
+  for (const key of ["label", "fileName", "imageId", "description"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return "Question diagram";
 }
 
 function stableJson(value: unknown) {

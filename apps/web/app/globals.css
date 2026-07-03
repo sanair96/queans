@@ -391,6 +391,10 @@ h2 {
   font-size: 12px;
 }
 
+.review-diagram-grid {
+  margin-bottom: 16px;
+}
+
 .source-details {
   min-width: 0;
   color: var(--muted);

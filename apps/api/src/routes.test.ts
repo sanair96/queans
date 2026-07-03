@@ -16,6 +16,7 @@ import {
   paperIngestionInputPayload,
   reviewApprovalConflictPayload,
   reviewEditApprovalConflictPayload,
+  reviewItemResponsePayload,
   reviewItemAlreadyClosedPayload,
   reviewItemUpdateData,
   reviewReasonCodesFromJson,
@@ -156,6 +157,34 @@ describe("paperContextPayloadFromSourcePaper", () => {
         metadata: null
       })
     ).toBeNull();
+  });
+});
+
+describe("reviewItemResponsePayload", () => {
+  it("signs review diagram assets so reviewers can see source images", async () => {
+    const reviewItem = {
+      id: "review-item-1",
+      candidate: {
+        id: "candidate-1",
+        diagramAsset: {
+          imageId: "img-1",
+          objectKey: "ocr-assets/source-1/page-1/img-1.png"
+        }
+      }
+    };
+    const r2 = {
+      createPresignedRead: (objectKey: string) => Promise.resolve(`https://r2.example/${objectKey}`)
+    };
+
+    await expect(reviewItemResponsePayload(reviewItem, r2)).resolves.toMatchObject({
+      candidate: {
+        diagramAsset: {
+          imageId: "img-1",
+          objectKey: "ocr-assets/source-1/page-1/img-1.png",
+          url: "https://r2.example/ocr-assets/source-1/page-1/img-1.png"
+        }
+      }
+    });
   });
 });
 

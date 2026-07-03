@@ -466,7 +466,7 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
     return reply.code(202).send(ingestionQueuedPayload(retryRun));
   });
 
-  app.get("/api/review/tasks", async () => {
+  app.get("/api/review/tasks", async (_request, reply) => {
     const reviewItems = await prisma.reviewItem.findMany({
       where: openReviewItemsWhere(),
       include: {
@@ -476,8 +476,13 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
       orderBy: [{ severity: "desc" }, { createdAt: "asc" }],
       take: 100
     });
+    const hasDiagramAssets = reviewItems.some((item) => diagramAssetNeedsSigning(item.candidate.diagramAsset));
+    const r2 = hasDiagramAssets ? getR2ObjectStoreOrReply(reply) : undefined;
+    if (hasDiagramAssets && !r2) {
+      return reply;
+    }
 
-    return { reviewItems };
+    return { reviewItems: await Promise.all(reviewItems.map((item) => reviewItemResponsePayload(item, r2))) };
   });
 
   app.patch<{ Params: IdParams }>("/api/review/tasks/:id", async (request, reply) => {
@@ -637,7 +642,22 @@ type QuestionWithRelations = Prisma.QuestionGetPayload<{
   };
 }>;
 
-async function questionResponsePayload(question: QuestionWithRelations, r2: R2ObjectStore | undefined) {
+type DiagramAssetSigner = Pick<R2ObjectStore, "createPresignedRead">;
+
+export async function reviewItemResponsePayload<T extends { candidate: { diagramAsset: unknown } }>(
+  reviewItem: T,
+  r2: DiagramAssetSigner | undefined
+) {
+  return {
+    ...reviewItem,
+    candidate: {
+      ...reviewItem.candidate,
+      diagramAsset: await signDiagramAsset(reviewItem.candidate.diagramAsset, r2)
+    }
+  };
+}
+
+async function questionResponsePayload(question: QuestionWithRelations, r2: DiagramAssetSigner | undefined) {
   return {
     ...question,
     diagramAsset: await signDiagramAsset(question.diagramAsset, r2),
@@ -663,7 +683,7 @@ function diagramAssetNeedsSigning(value: unknown): boolean {
   return typeof record.objectKey === "string" || Object.values(record).some(diagramAssetNeedsSigning);
 }
 
-async function signDiagramAsset(value: unknown, r2: R2ObjectStore | undefined): Promise<unknown> {
+async function signDiagramAsset(value: unknown, r2: DiagramAssetSigner | undefined): Promise<unknown> {
   if (Array.isArray(value)) {
     return Promise.all(value.map((item) => signDiagramAsset(item, r2)));
   }

@@ -13,6 +13,31 @@ describe("ReviewWorkbench", () => {
     expect(html).toContain("Needs info");
     expect(html).toContain("title=\"Needs more info\"");
   });
+
+  it("renders signed diagram images for the selected review item", () => {
+    const html = renderToStaticMarkup(
+      <ReviewWorkbench
+        initialItems={[
+          {
+            ...reviewItem,
+            candidate: {
+              ...reviewItem.candidate,
+              questionType: "DIAGRAM",
+              diagramAsset: {
+                imageId: "img-1",
+                label: "Circuit diagram",
+                url: "https://r2.example/circuit.png"
+              }
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(html).toContain("<img");
+    expect(html).toContain("src=\"https://r2.example/circuit.png\"");
+    expect(html).toContain("alt=\"Circuit diagram\"");
+  });
 });
 
 describe("shouldRemoveReviewItemAfterDecision", () => {
