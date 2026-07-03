@@ -391,6 +391,21 @@ h2 {
   font-size: 12px;
 }
 
+.diagram-figure-missing {
+  display: grid;
+  gap: 6px;
+  align-content: center;
+  min-height: 120px;
+  background: #fff7da;
+  color: var(--warning);
+}
+
+.diagram-figure-missing code {
+  overflow-wrap: anywhere;
+  color: #6e4d00;
+  font-size: 11px;
+}
+
 .review-diagram-grid {
   margin-bottom: 16px;
 }

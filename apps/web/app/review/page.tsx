@@ -9,6 +9,7 @@ interface ReviewItem {
   status: string;
   createdAt: string;
   reviewPayload: unknown;
+  sourceImages?: unknown;
   sourcePaper: {
     sourceFileName: string;
   };

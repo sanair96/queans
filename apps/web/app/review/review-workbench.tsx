@@ -15,6 +15,7 @@ interface ReviewItem {
   status: string;
   createdAt: string;
   reviewPayload: unknown;
+  sourceImages?: unknown;
   sourcePaper: {
     sourceFileName: string;
   };
@@ -57,6 +58,11 @@ interface DiagramImage {
   label: string;
 }
 
+interface MissingDiagramImage {
+  objectKey: string;
+  label: string;
+}
+
 type ReviewDecision =
   | "APPROVE"
   | "EDIT_AND_APPROVE"
@@ -83,7 +89,14 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
   const [draft, setDraft] = useState<ReviewDraft>(() => draftFromItem(selected));
   const [busyDecision, setBusyDecision] = useState<ReviewDecision | null>(null);
   const [status, setStatus] = useState("");
-  const diagramImages = diagramImagesFromAsset(selected?.candidate.diagramAsset);
+  const diagramImages = uniqueDiagramImages([
+    ...diagramImagesFromAsset(selected?.candidate.diagramAsset),
+    ...diagramImagesFromAsset(selected?.sourceImages)
+  ]);
+  const missingDiagramImages = uniqueMissingDiagramImages([
+    ...missingDiagramImagesFromAsset(selected?.candidate.diagramAsset),
+    ...missingDiagramImagesFromAsset(selected?.sourceImages)
+  ]);
 
   useEffect(() => {
     setDraft(draftFromItem(selected));
@@ -240,7 +253,7 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
 
         <div className="review-columns">
           <div className="evidence-pane">
-            {diagramImages.length > 0 ? (
+            {diagramImages.length > 0 || missingDiagramImages.length > 0 ? (
               <>
                 <h3>Source images</h3>
                 <div className="diagram-grid review-diagram-grid">
@@ -248,6 +261,13 @@ export function ReviewWorkbench({ initialItems }: ReviewWorkbenchProps) {
                     <figure key={image.url} className="diagram-figure">
                       <img src={image.url} alt={image.label} />
                       <figcaption>{image.label}</figcaption>
+                    </figure>
+                  ))}
+                  {missingDiagramImages.map((image) => (
+                    <figure key={image.objectKey} className="diagram-figure diagram-figure-missing">
+                      <strong>Source image unavailable</strong>
+                      <figcaption>{image.label}</figcaption>
+                      <code>{image.objectKey}</code>
                     </figure>
                   ))}
                 </div>
@@ -543,6 +563,43 @@ function diagramImagesFromAsset(value: unknown): DiagramImage[] {
         ]
       : [];
   return [...current, ...Object.values(record).flatMap(diagramImagesFromAsset)];
+}
+
+function uniqueDiagramImages(images: DiagramImage[]) {
+  const imagesByUrl = new Map<string, DiagramImage>();
+  for (const image of images) {
+    imagesByUrl.set(image.url, image);
+  }
+  return [...imagesByUrl.values()];
+}
+
+function missingDiagramImagesFromAsset(value: unknown): MissingDiagramImage[] {
+  if (Array.isArray(value)) {
+    return value.flatMap(missingDiagramImagesFromAsset);
+  }
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+
+  const record = value as Record<string, unknown>;
+  const current =
+    typeof record.objectKey === "string" && record.storageStatus === "MISSING"
+      ? [
+          {
+            objectKey: record.objectKey,
+            label: diagramLabel(record)
+          }
+        ]
+      : [];
+  return [...current, ...Object.values(record).flatMap(missingDiagramImagesFromAsset)];
+}
+
+function uniqueMissingDiagramImages(images: MissingDiagramImage[]) {
+  const imagesByObjectKey = new Map<string, MissingDiagramImage>();
+  for (const image of images) {
+    imagesByObjectKey.set(image.objectKey, image);
+  }
+  return [...imagesByObjectKey.values()];
 }
 
 function diagramLabel(record: Record<string, unknown>) {

@@ -186,6 +186,69 @@ describe("reviewItemResponsePayload", () => {
       }
     });
   });
+
+  it("signs OCR source images attached to review items", async () => {
+    const reviewItem = {
+      id: "review-item-1",
+      candidate: {
+        id: "candidate-1",
+        diagramAsset: null
+      }
+    };
+    const r2 = {
+      createPresignedRead: (objectKey: string) => Promise.resolve(`https://r2.example/${objectKey}`)
+    };
+
+    await expect(
+      reviewItemResponsePayload(reviewItem, r2, [
+        {
+          imageId: "img-1",
+          objectKey: "ocr-assets/source-1/page-1/img-1.png",
+          label: "page 1 img-1.png"
+        }
+      ])
+    ).resolves.toMatchObject({
+      sourceImages: [
+        {
+          imageId: "img-1",
+          objectKey: "ocr-assets/source-1/page-1/img-1.png",
+          url: "https://r2.example/ocr-assets/source-1/page-1/img-1.png"
+        }
+      ]
+    });
+  });
+
+  it("marks missing review diagram assets instead of failing the whole queue", async () => {
+    const reviewItem = {
+      id: "review-item-1",
+      candidate: {
+        id: "candidate-1",
+        diagramAsset: {
+          imageId: "img-1",
+          objectKey: "ocr-assets/source-1/page-1/missing.png"
+        }
+      }
+    };
+    const r2 = {
+      createPresignedRead: () =>
+        Promise.reject(
+          Object.assign(new Error("UnknownError"), {
+            name: "NotFound",
+            $metadata: { httpStatusCode: 404 }
+          })
+        )
+    };
+
+    await expect(reviewItemResponsePayload(reviewItem, r2)).resolves.toMatchObject({
+      candidate: {
+        diagramAsset: {
+          imageId: "img-1",
+          objectKey: "ocr-assets/source-1/page-1/missing.png",
+          storageStatus: "MISSING"
+        }
+      }
+    });
+  });
 });
 
 describe("uploadCompletionConflict", () => {

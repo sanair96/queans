@@ -38,6 +38,61 @@ describe("ReviewWorkbench", () => {
     expect(html).toContain("src=\"https://r2.example/circuit.png\"");
     expect(html).toContain("alt=\"Circuit diagram\"");
   });
+
+  it("shows missing diagram assets without rendering a broken image", () => {
+    const html = renderToStaticMarkup(
+      <ReviewWorkbench
+        initialItems={[
+          {
+            ...reviewItem,
+            candidate: {
+              ...reviewItem.candidate,
+              questionType: "DIAGRAM",
+              diagramAsset: {
+                imageId: "img-1",
+                objectKey: "ocr-assets/source-1/page-1/missing.png",
+                storageStatus: "MISSING"
+              }
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(html).toContain("Source image unavailable");
+    expect(html).toContain("ocr-assets/source-1/page-1/missing.png");
+    expect(html).not.toContain("<img");
+  });
+
+  it("renders signed OCR source images when the candidate diagram asset is incomplete", () => {
+    const html = renderToStaticMarkup(
+      <ReviewWorkbench
+        initialItems={[
+          {
+            ...reviewItem,
+            sourceImages: [
+              {
+                imageId: "img-1",
+                label: "page 1 img-1.png",
+                url: "https://r2.example/source-page.png"
+              }
+            ],
+            candidate: {
+              ...reviewItem.candidate,
+              questionType: "DIAGRAM",
+              diagramAsset: {
+                asset_id: "img-1"
+              }
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(html).toContain("<img");
+    expect(html).toContain("src=\"https://r2.example/source-page.png\"");
+    expect(html).toContain("alt=\"page 1 img-1.png\"");
+  });
 });
 
 describe("shouldRemoveReviewItemAfterDecision", () => {

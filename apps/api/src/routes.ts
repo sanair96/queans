@@ -476,13 +476,24 @@ export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
       orderBy: [{ severity: "desc" }, { createdAt: "asc" }],
       take: 100
     });
-    const hasDiagramAssets = reviewItems.some((item) => diagramAssetNeedsSigning(item.candidate.diagramAsset));
+    const sourceImagesByReviewItemId = new Map(
+      await Promise.all(
+        reviewItems.map(async (item) => [item.id, await reviewSourceImagesForItem(item)] as const)
+      )
+    );
+    const hasDiagramAssets =
+      reviewItems.some((item) => diagramAssetNeedsSigning(item.candidate.diagramAsset)) ||
+      [...sourceImagesByReviewItemId.values()].some(diagramAssetNeedsSigning);
     const r2 = hasDiagramAssets ? getR2ObjectStoreOrReply(reply) : undefined;
     if (hasDiagramAssets && !r2) {
       return reply;
     }
 
-    return { reviewItems: await Promise.all(reviewItems.map((item) => reviewItemResponsePayload(item, r2))) };
+    return {
+      reviewItems: await Promise.all(
+        reviewItems.map((item) => reviewItemResponsePayload(item, r2, sourceImagesByReviewItemId.get(item.id) ?? []))
+      )
+    };
   });
 
   app.patch<{ Params: IdParams }>("/api/review/tasks/:id", async (request, reply) => {
@@ -646,15 +657,81 @@ type DiagramAssetSigner = Pick<R2ObjectStore, "createPresignedRead">;
 
 export async function reviewItemResponsePayload<T extends { candidate: { diagramAsset: unknown } }>(
   reviewItem: T,
-  r2: DiagramAssetSigner | undefined
+  r2: DiagramAssetSigner | undefined,
+  sourceImages: unknown[] = []
 ) {
   return {
     ...reviewItem,
+    sourceImages: await signDiagramAsset(sourceImages, r2),
     candidate: {
       ...reviewItem.candidate,
       diagramAsset: await signDiagramAsset(reviewItem.candidate.diagramAsset, r2)
     }
   };
+}
+
+async function reviewSourceImagesForItem(item: {
+  sourcePaperId: string;
+  candidate: {
+    pageNumber: number | null;
+    sourcePageStart: number | null;
+    sourcePageEnd: number | null;
+  };
+}) {
+  const sourcePageStart = item.candidate.sourcePageStart ?? item.candidate.pageNumber;
+  const sourcePageEnd = item.candidate.sourcePageEnd ?? sourcePageStart;
+  if (!sourcePageStart || !sourcePageEnd) {
+    return [];
+  }
+
+  const blocks = await prisma.ocrBlock.findMany({
+    where: {
+      blockType: "image",
+      ocrPage: {
+        sourcePaperId: item.sourcePaperId,
+        pageNumber: {
+          gte: sourcePageStart,
+          lte: sourcePageEnd
+        }
+      }
+    },
+    include: {
+      ocrPage: {
+        select: {
+          pageNumber: true
+        }
+      }
+    },
+    orderBy: { createdAt: "asc" },
+    take: 8
+  });
+
+  const sourceImages = blocks
+    .map((block) => sourceImageAssetFromBlock(block))
+    .filter((asset): asset is NonNullable<typeof asset> => asset !== undefined);
+  return uniqueSourceImageAssets(sourceImages);
+}
+
+function sourceImageAssetFromBlock(block: { text: string; sourceAsset: Prisma.JsonValue | null; ocrPage: { pageNumber: number } }) {
+  if (!block.sourceAsset || typeof block.sourceAsset !== "object" || Array.isArray(block.sourceAsset)) {
+    return undefined;
+  }
+
+  return {
+    ...block.sourceAsset,
+    label: `page ${block.ocrPage.pageNumber} ${block.text}`
+  };
+}
+
+function uniqueSourceImageAssets(assets: Array<Record<string, unknown>>) {
+  const assetsByKey = new Map<string, Record<string, unknown>>();
+  for (const asset of assets) {
+    const key = typeof asset.objectKey === "string" ? asset.objectKey : JSON.stringify(asset);
+    if (!assetsByKey.has(key)) {
+      assetsByKey.set(key, asset);
+    }
+  }
+  return [...assetsByKey.values()];
 }
 
 async function questionResponsePayload(question: QuestionWithRelations, r2: DiagramAssetSigner | undefined) {
@@ -696,12 +773,38 @@ async function signDiagramAsset(value: unknown, r2: DiagramAssetSigner | undefin
   );
   const signed = Object.fromEntries(entries);
   if (typeof signed.objectKey === "string" && r2) {
-    return {
-      ...signed,
-      url: await r2.createPresignedRead(signed.objectKey, maxR2PresignExpiresSeconds)
-    };
+    try {
+      return {
+        ...signed,
+        url: await r2.createPresignedRead(signed.objectKey, maxR2PresignExpiresSeconds)
+      };
+    } catch (error) {
+      if (!isStorageObjectNotFoundError(error)) {
+        throw error;
+      }
+
+      return {
+        ...signed,
+        storageStatus: "MISSING"
+      };
+    }
   }
   return signed;
+}
+
+function isStorageObjectNotFoundError(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const record = error as {
+    name?: unknown;
+    $metadata?: {
+      httpStatusCode?: unknown;
+    };
+  };
+
+  return record.name === "NotFound" || record.$metadata?.httpStatusCode === 404;
 }
 
 function buildSourcePaperObjectKey(fileName: string) {
