@@ -23,9 +23,27 @@ enum SourcePaperStatus {
   CANCELLED
 }
 
+enum BlueprintDocumentStatus {
+  UPLOADED
+  QUEUED
+  PROCESSING
+  READY_FOR_APPROVAL
+  NEEDS_REVIEW
+  APPROVED
+  FAILED
+}
+
+enum BlueprintPrimaryLanguageSource {
+  UPLOAD_METADATA
+  INFERRED
+  USER_CONFIRMED
+  UNRESOLVED
+}
+
 enum WorkflowType {
   PAPER_INGESTION
   PAPER_GENERATION
+  BLUEPRINT_INGESTION
 }
 
 enum WorkflowStatus {
@@ -189,7 +207,8 @@ model UploadObject {
   createdAt      DateTime     @default(now()) @map("created_at")
   completedAt    DateTime?    @map("completed_at")
 
-  sourcePaper SourcePaper?
+  sourcePaper       SourcePaper?
+  blueprintDocument BlueprintDocument?
 
   @@index([status, createdAt])
   @@map("upload_objects")
@@ -225,12 +244,68 @@ model SourcePaper {
   @@map("source_papers")
 }
 
+model BlueprintDocument {
+  id                        String                         @id @default(uuid())
+  uploadObjectId            String                         @unique @map("upload_object_id")
+  uploadObject              UploadObject                   @relation(fields: [uploadObjectId], references: [id])
+  originalFilename          String                         @map("original_filename")
+  title                     String?
+  documentType              String?                        @map("document_type")
+  board                     String                         @default("General")
+  subject                   String?
+  academicLevel             String?                        @map("academic_level")
+  detectedLanguages         Json?                          @map("detected_languages")
+  primaryLanguage           String?                        @map("primary_language")
+  primaryLanguageSource     BlueprintPrimaryLanguageSource @default(UNRESOLVED) @map("primary_language_source")
+  languageDetectionMetadata Json?                          @map("language_detection_metadata")
+  status                    BlueprintDocumentStatus        @default(UPLOADED)
+  pageCount                 Int?                           @map("page_count")
+  draftRulesJson            Json?                          @map("draft_rules_json")
+  approvedRulesJson         Json?                          @map("approved_rules_json")
+  rawExtractionJson         Json?                          @map("raw_extraction_json")
+  extractionMetadataJson    Json?                          @map("extraction_metadata_json")
+  confidenceSummaryJson     Json?                          @map("confidence_summary_json")
+  extractionError           String?                        @map("extraction_error")
+  reviewVersion             Int                            @default(0) @map("review_version")
+  approvedAt                DateTime?                      @map("approved_at")
+  approvedBy                String?                        @map("approved_by")
+  createdAt                 DateTime                       @default(now()) @map("created_at")
+  updatedAt                 DateTime                       @updatedAt @map("updated_at")
+
+  ocrPages     BlueprintOcrPage[]
+  workflowRuns WorkflowRun[]
+
+  @@index([board])
+  @@index([status, createdAt])
+  @@map("blueprint_documents")
+}
+
+model BlueprintOcrPage {
+  id                  String            @id @default(uuid())
+  blueprintDocumentId String            @map("blueprint_document_id")
+  blueprintDocument   BlueprintDocument @relation(fields: [blueprintDocumentId], references: [id], onDelete: Cascade)
+  pageNumber          Int               @map("page_number")
+  markdownText        String            @map("markdown_text")
+  plainText           String?           @map("plain_text")
+  detectedLanguages   Json?             @map("detected_languages")
+  ocrConfidence       Float?            @map("ocr_confidence")
+  providerMetadata    Json?             @map("provider_metadata")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+
+  @@unique([blueprintDocumentId, pageNumber])
+  @@index([blueprintDocumentId, pageNumber])
+  @@map("blueprint_ocr_pages")
+}
+
 model WorkflowRun {
   id                   String         @id @default(uuid())
   workflowType         WorkflowType   @map("workflow_type")
   entityId             String         @map("entity_id")
   sourcePaperId        String?        @map("source_paper_id")
   sourcePaper          SourcePaper?   @relation(fields: [sourcePaperId], references: [id])
+  blueprintDocumentId  String?        @map("blueprint_document_id")
+  blueprintDocument    BlueprintDocument? @relation(fields: [blueprintDocumentId], references: [id])
   temporalRunId        String?        @unique @map("temporal_run_id")
   retryOfWorkflowRunId String?        @map("retry_of_workflow_run_id")
   retryOfWorkflowRun   WorkflowRun?   @relation("WorkflowRunRetryLineage", fields: [retryOfWorkflowRunId], references: [id])
@@ -255,6 +330,7 @@ model WorkflowRun {
 
   @@index([workflowType, status, createdAt])
   @@index([entityId])
+  @@index([blueprintDocumentId])
   @@index([retryOfWorkflowRunId])
   @@map("workflow_runs")
 }

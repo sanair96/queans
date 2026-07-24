@@ -207,7 +207,7 @@ export const blueprintDocumentStatuses = [
   "UPLOADED",
   "QUEUED",
   "PROCESSING",
-  "AWAITS_APPROVAL",
+  "READY_FOR_APPROVAL",
   "NEEDS_REVIEW",
   "APPROVED",
   "FAILED"
