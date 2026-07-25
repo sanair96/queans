@@ -1,8 +1,10 @@
 export const PAPER_INGESTION_TASK_QUEUE = "paper-ingestion";
 export const PAPER_OCR_TASK_QUEUE = "paper-ocr";
 export const PAPER_LLM_TASK_QUEUE = "paper-llm-extraction";
+export const BLUEPRINT_INGESTION_TASK_QUEUE = "blueprint-ingestion";
 
 export const PAPER_INGESTION_WORKFLOW_TYPE = "PaperIngestionWorkflow";
+export const BLUEPRINT_INGESTION_WORKFLOW_TYPE = "BlueprintIngestionWorkflow";
 
 export const mistralExecutionModes = ["sync", "batch"] as const;
 export type MistralExecutionMode = (typeof mistralExecutionModes)[number];
@@ -52,4 +54,13 @@ export interface PaperIngestionWorkflowInput {
 export interface HumanReviewCompletedSignal {
   workflowRunId: string;
   reviewedBy?: string;
+}
+
+export function blueprintIngestionWorkflowId(workflowRunId: string) {
+  return `blueprint-ingestion/${workflowRunId}`;
+}
+
+export interface BlueprintIngestionWorkflowInput {
+  workflowRunId: string;
+  blueprintDocumentId: string;
 }
