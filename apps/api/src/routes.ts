@@ -19,6 +19,7 @@ import { dispatchPendingWorkflowStarts } from "./outbox.js";
 import { checkReadiness } from "./readiness.js";
 import { signalHumanReviewCompleted } from "./temporal.js";
 import { toInputJson, toNullableInputJson } from "./json.js";
+import { registerBlueprintRoutes } from "./blueprint-routes.js";
 
 interface IdParams {
   id: string;
@@ -32,6 +33,8 @@ export const INTERNAL_API_TOKEN_HEADER = "x-queans-internal-token";
 
 export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
   app.get("/health", () => ({ ok: true }));
+
+  registerBlueprintRoutes(app);
 
   app.get("/ready", async (_request, reply) => {
     const result = await checkReadiness(config);

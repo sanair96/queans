@@ -30,6 +30,18 @@ export function retryableWorkflowStartOutboxWhere(
   };
 }
 
+export function dispatchableWorkflowStartOutboxWhere(
+  maxAttempts = WORKFLOW_DISPATCH_MAX_ATTEMPTS,
+  staleBefore = workflowDispatchStaleBefore()
+) {
+  return {
+    ...retryableWorkflowStartOutboxWhere(maxAttempts, staleBefore),
+    workflowRun: {
+      workflowType: WorkflowType.PAPER_INGESTION
+    }
+  } satisfies Prisma.WorkflowStartOutboxWhereInput;
+}
+
 export function workflowDispatchStaleBefore(now = new Date()) {
   return new Date(now.getTime() - WORKFLOW_DISPATCH_STALE_LOCK_MS);
 }
@@ -94,7 +106,7 @@ export function workflowDispatchSuccessOutboxUpdate() {
 export async function dispatchPendingWorkflowStarts(config: ApiConfig, limit = 10, maxAttempts = WORKFLOW_DISPATCH_MAX_ATTEMPTS) {
   const staleBefore = workflowDispatchStaleBefore();
   const pending = await prisma.workflowStartOutbox.findMany({
-    where: retryableWorkflowStartOutboxWhere(maxAttempts, staleBefore),
+    where: dispatchableWorkflowStartOutboxWhere(maxAttempts, staleBefore),
     include: { workflowRun: true },
     orderBy: { createdAt: "asc" },
     take: limit
