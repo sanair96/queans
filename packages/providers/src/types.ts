@@ -41,6 +41,35 @@ export interface OcrResult {
   rawJson: unknown;
 }
 
+export interface BlueprintLanguageEvidenceResult {
+  tag: string;
+  displayName?: string | undefined;
+  confidence?: number | null | undefined;
+  pageNumbers?: number[] | undefined;
+}
+
+export interface BlueprintLanguageAnalysisResult {
+  provider: "mistral";
+  model: string;
+  detectedLanguages: BlueprintLanguageEvidenceResult[];
+  primaryLanguage: {
+    tag: string | null;
+    confidence: number | null;
+  };
+  mixedLanguagePageNumbers: number[];
+  multilingualRelationship: "MONOLINGUAL" | "DUPLICATE_TRANSLATIONS" | "DISTINCT_REQUIREMENTS" | "MIXED_OR_UNCERTAIN";
+  pageLanguages: Array<{
+    pageNumber: number;
+    languages: BlueprintLanguageEvidenceResult[];
+  }>;
+  rawJson: unknown;
+  usage: {
+    promptTokens?: number | undefined;
+    completionTokens?: number | undefined;
+    totalTokens?: number | undefined;
+  };
+}
+
 export interface ExtractedQuestionCandidate {
   questionNumber?: string | undefined;
   sectionName?: string | undefined;

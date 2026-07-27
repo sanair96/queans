@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { MistralBatchProvider, parseMistralExtractionContent, parseMistralOcrResult } from "./mistral.js";
+import {
+  MistralBatchProvider,
+  MistralBlueprintLanguageAnalyzer,
+  parseMistralExtractionContent,
+  parseMistralOcrResult
+} from "./mistral.js";
 
 const baseCandidate = {
   raw_ocr_text: "1. What is photosynthesis?",
@@ -559,6 +564,73 @@ describe("MistralQuestionExtractor", () => {
     const messages = request.messages as Array<{ role: string; content: string }>;
     expect(messages[0]?.content).toContain("For numerical questions, compute the answer");
     expect(messages[0]?.content).toContain("Do not add ANSWER_UNCERTAIN or LLM_GENERATED_ANSWER_UNVERIFIED");
+  });
+});
+
+describe("MistralBlueprintLanguageAnalyzer", () => {
+  it("requests generic multilingual analysis with page-level language evidence", async () => {
+    const fetchCalls: unknown[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (_input, init) => {
+      const body = init?.body;
+      if (typeof body !== "string") {
+        throw new Error("Expected Mistral request body to be serialized JSON.");
+      }
+      fetchCalls.push(JSON.parse(body));
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    detected_languages: [
+                      { tag: "en", confidence: 0.99, page_numbers: [1] },
+                      { tag: "hi", confidence: 0.99, page_numbers: [2] }
+                    ],
+                    primary_language: { tag: "hi", confidence: 0.96 },
+                    mixed_language_page_numbers: [],
+                    multilingual_relationship: "DUPLICATE_TRANSLATIONS",
+                    page_languages: [
+                      { page_number: 1, languages: [{ tag: "en", confidence: 0.99 }] },
+                      { page_number: 2, languages: [{ tag: "hi", confidence: 0.99 }] }
+                    ]
+                  })
+                }
+              }
+            ],
+            usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 }
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+    };
+
+    try {
+      const analyzer = new MistralBlueprintLanguageAnalyzer(testMistralConfig);
+      const result = await analyzer.analyzePages({
+        pages: [
+          { pageNumber: 1, markdown: "# Question Paper" },
+          { pageNumber: 2, markdown: "# प्रश्न पत्र" }
+        ]
+      });
+      expect(result).toMatchObject({
+        primaryLanguage: { tag: "hi", confidence: 0.96 },
+        multilingualRelationship: "DUPLICATE_TRANSLATIONS"
+      });
+      expect(result.pageLanguages[0]).toMatchObject({ pageNumber: 1, languages: [{ tag: "en" }] });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const request = asRecord(fetchCalls[0]);
+    expect(request.response_format).toMatchObject({
+      type: "json_schema",
+      json_schema: { name: "blueprint_language_analysis", strict: true }
+    });
+    const messages = request.messages as Array<{ role: string; content: string }>;
+    expect(messages[0]?.content).toContain("every language present");
+    expect(messages[1]?.content).toContain("Page 2:\n# प्रश्न पत्र");
   });
 });
 

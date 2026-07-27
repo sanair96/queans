@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type {
+  BlueprintLanguageAnalysisResult,
   ExtractedQuestionCandidate,
   OcrImage,
   OcrPage,
@@ -296,7 +297,119 @@ const chatCompletionSchema = z.object({
     .optional()
 });
 
+const blueprintLanguageAnalysisResponseSchema = z.object({
+  detected_languages: z.array(
+    z.object({
+      tag: z.string().min(1),
+      display_name: z.string().min(1).optional(),
+      confidence: z.number().min(0).max(1).nullable().optional(),
+      page_numbers: z.array(z.number().int().positive()).optional()
+    })
+  ).min(1),
+  primary_language: z.object({
+    tag: z.string().min(1).nullable(),
+    confidence: z.number().min(0).max(1).nullable()
+  }),
+  mixed_language_page_numbers: z.array(z.number().int().positive()),
+  multilingual_relationship: z.enum([
+    "MONOLINGUAL",
+    "DUPLICATE_TRANSLATIONS",
+    "DISTINCT_REQUIREMENTS",
+    "MIXED_OR_UNCERTAIN"
+  ]),
+  page_languages: z.array(
+    z.object({
+      page_number: z.number().int().positive(),
+      languages: z.array(
+        z.object({
+          tag: z.string().min(1),
+          display_name: z.string().min(1).optional(),
+          confidence: z.number().min(0).max(1).nullable().optional()
+        })
+      ).min(1)
+    })
+  )
+});
+
+const blueprintLanguageAnalysisJsonSchema = {
+  title: "BlueprintLanguageAnalysis",
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "detected_languages",
+    "primary_language",
+    "mixed_language_page_numbers",
+    "multilingual_relationship",
+    "page_languages"
+  ],
+  properties: {
+    detected_languages: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["tag"],
+        properties: {
+          tag: { type: "string" },
+          display_name: { type: "string" },
+          confidence: { type: ["number", "null"], minimum: 0, maximum: 1 },
+          page_numbers: { type: "array", items: { type: "integer", minimum: 1 } }
+        }
+      }
+    },
+    primary_language: {
+      type: "object",
+      additionalProperties: false,
+      required: ["tag", "confidence"],
+      properties: {
+        tag: { type: ["string", "null"] },
+        confidence: { type: ["number", "null"], minimum: 0, maximum: 1 }
+      }
+    },
+    mixed_language_page_numbers: { type: "array", items: { type: "integer", minimum: 1 } },
+    multilingual_relationship: {
+      type: "string",
+      enum: ["MONOLINGUAL", "DUPLICATE_TRANSLATIONS", "DISTINCT_REQUIREMENTS", "MIXED_OR_UNCERTAIN"]
+    },
+    page_languages: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["page_number", "languages"],
+        properties: {
+          page_number: { type: "integer", minimum: 1 },
+          languages: {
+            type: "array",
+            minItems: 1,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["tag"],
+              properties: {
+                tag: { type: "string" },
+                display_name: { type: "string" },
+                confidence: { type: ["number", "null"], minimum: 0, maximum: 1 }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+} as const;
+
 const defaultMistralRequestTimeoutMs = 120_000;
+
+const blueprintLanguageAnalysisSystemPrompt = [
+  "Analyze OCR pages from one uploaded blueprint document. Do not extract rules or rewrite the document.",
+  "Identify every language present using valid BCP 47 tags, including mixed-language pages.",
+  "Classify multilingual content as MONOLINGUAL, DUPLICATE_TRANSLATIONS when blocks express the same rules, DISTINCT_REQUIREMENTS when language blocks contain additional requirements, or MIXED_OR_UNCERTAIN when evidence is insufficient.",
+  "Page language evidence must preserve every detected language; never treat a bilingual document as separate documents.",
+  "Choose a primary language only from detected languages. If uncertain, set tag to null and confidence to null.",
+  "Return only the requested JSON."
+].join(" ");
 
 const segmentationSystemPrompt = [
   "Segment OCR markdown into question candidates only. Do not answer or solve.",
@@ -357,6 +470,69 @@ export class MistralOcrProvider {
       }
     );
     return parseMistralOcrResult(raw);
+  }
+}
+
+export class MistralBlueprintLanguageAnalyzer {
+  constructor(private readonly config: MistralConfig) {}
+
+  async analyzePages(input: { pages: Array<{ pageNumber: number; markdown: string }> }): Promise<BlueprintLanguageAnalysisResult> {
+    const raw = await callMistral(this.config, "/v1/chat/completions", {
+      model: this.config.extractorModel,
+      temperature: 0,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "blueprint_language_analysis",
+          strict: true,
+          schema: blueprintLanguageAnalysisJsonSchema
+        }
+      },
+      messages: [
+        { role: "system", content: blueprintLanguageAnalysisSystemPrompt },
+        {
+          role: "user",
+          content: input.pages.map((page) => `Page ${page.pageNumber}:\n${page.markdown}`).join("\n\n")
+        }
+      ]
+    });
+    const completion = chatCompletionSchema.parse(raw);
+    const firstChoice = completion.choices[0];
+    if (!firstChoice) {
+      throw new Error("Mistral Blueprint language analysis returned no choices");
+    }
+    const analysis = blueprintLanguageAnalysisResponseSchema.parse(JSON.parse(firstChoice.message.content) as unknown);
+
+    return {
+      provider: "mistral",
+      model: this.config.extractorModel,
+      detectedLanguages: analysis.detected_languages.map((language) => ({
+        tag: language.tag,
+        displayName: language.display_name,
+        confidence: language.confidence,
+        pageNumbers: language.page_numbers
+      })),
+      primaryLanguage: {
+        tag: analysis.primary_language.tag,
+        confidence: analysis.primary_language.confidence
+      },
+      mixedLanguagePageNumbers: analysis.mixed_language_page_numbers,
+      multilingualRelationship: analysis.multilingual_relationship,
+      pageLanguages: analysis.page_languages.map((page) => ({
+        pageNumber: page.page_number,
+        languages: page.languages.map((language) => ({
+          tag: language.tag,
+          displayName: language.display_name,
+          confidence: language.confidence
+        }))
+      })),
+      rawJson: raw,
+      usage: {
+        promptTokens: completion.usage?.prompt_tokens,
+        completionTokens: completion.usage?.completion_tokens,
+        totalTokens: completion.usage?.total_tokens
+      }
+    };
   }
 }
 
