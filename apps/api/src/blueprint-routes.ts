@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import {
   blueprintDocumentStatuses,
+  blueprintLanguageAnalysisSchema,
   blueprintLanguageTagSchema,
   defaultBlueprintBoard,
   uploadInitSchema
@@ -54,6 +55,12 @@ const blueprintMetadataPatchSchema = blueprintMetadataSchema
       });
     }
   });
+
+const blueprintPrimaryLanguageConfirmationSchema = z
+  .object({
+    primaryLanguage: blueprintLanguageTagSchema
+  })
+  .strict();
 
 const blueprintListQuerySchema = z.object({
   search: z.string().trim().min(1).max(512).optional(),
@@ -301,6 +308,55 @@ export function registerBlueprintRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: "BLUEPRINT_NOT_FOUND" });
     }
     return blueprintMetadataPayload(blueprintDocument);
+  });
+
+  app.put<{ Params: BlueprintIdParams }>("/api/blueprints/:id/primary-language", async (request, reply) => {
+    const input = blueprintPrimaryLanguageConfirmationSchema.parse(request.body);
+    const blueprintDocument = await prisma.blueprintDocument.findUnique({
+      where: { id: request.params.id },
+      select: { status: true, languageDetectionMetadata: true }
+    });
+    if (!blueprintDocument) {
+      return reply.code(404).send({ error: "BLUEPRINT_NOT_FOUND" });
+    }
+    if (blueprintDocument.status === "APPROVED") {
+      return reply.code(409).send({ error: "BLUEPRINT_APPROVED_IMMUTABLE" });
+    }
+
+    const languageAnalysis = blueprintLanguageAnalysisSchema.safeParse(blueprintDocument.languageDetectionMetadata);
+    if (!languageAnalysis.success) {
+      return reply.code(409).send({ error: "BLUEPRINT_LANGUAGE_ANALYSIS_NOT_READY" });
+    }
+    if (!languageAnalysis.data.detectedLanguages.some((language) => language.tag === input.primaryLanguage)) {
+      return reply.code(409).send({
+        error: "BLUEPRINT_PRIMARY_LANGUAGE_NOT_DETECTED",
+        detectedLanguages: languageAnalysis.data.detectedLanguages
+      });
+    }
+
+    const confirmedLanguageAnalysis = {
+      ...languageAnalysis.data,
+      primaryLanguage: {
+        tag: input.primaryLanguage,
+        source: "USER_CONFIRMED" as const,
+        confidence: 1,
+        requiresConfirmation: false
+      }
+    };
+    await prisma.blueprintDocument.updateMany({
+      where: { id: request.params.id, status: { not: "APPROVED" } },
+      data: {
+        primaryLanguage: input.primaryLanguage,
+        primaryLanguageSource: "USER_CONFIRMED",
+        languageDetectionMetadata: toInputJson(confirmedLanguageAnalysis)
+      }
+    });
+
+    const updatedBlueprintDocument = await prisma.blueprintDocument.findUnique({ where: { id: request.params.id } });
+    if (!updatedBlueprintDocument) {
+      return reply.code(404).send({ error: "BLUEPRINT_NOT_FOUND" });
+    }
+    return blueprintDetailPayload(updatedBlueprintDocument);
   });
 }
 

@@ -322,7 +322,29 @@ describe("Blueprint workflow lifecycle activities", () => {
       where: { id: "blueprint-1" },
       data: {
         status: "NEEDS_REVIEW",
-        extractionError: "A primary language must be selected before Blueprint rules can be extracted."
+        extractionError: "A primary language must be selected or confirmed before Blueprint rules can be extracted."
+      }
+    });
+  });
+
+  it("requires confirmation for an uncertain inferred primary language before extraction", async () => {
+    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({
+      id: "blueprint-1",
+      languageDetectionMetadata: {
+        ...persistedLanguageAnalysis,
+        primaryLanguage: { tag: "hi", source: "INFERRED", confidence: 0.7, requiresConfirmation: true }
+      },
+      ocrPages: [{ pageNumber: 1, markdownText: "source" }]
+    });
+
+    await expect(extractBlueprintRules(input)).resolves.toBeUndefined();
+
+    expect(mocks.blueprintExtraction.extractRules).not.toHaveBeenCalled();
+    expect(mocks.prisma.blueprintDocument.update).toHaveBeenCalledWith({
+      where: { id: "blueprint-1" },
+      data: {
+        status: "NEEDS_REVIEW",
+        extractionError: "A primary language must be selected or confirmed before Blueprint rules can be extracted."
       }
     });
   });

@@ -147,10 +147,11 @@ export async function extractBlueprintRules(input: BlueprintIngestionWorkflowInp
 
   const languageAnalysis = blueprintLanguageAnalysisSchema.safeParse(blueprintDocument.languageDetectionMetadata);
   const primaryLanguage = languageAnalysis.success ? languageAnalysis.data.primaryLanguage.tag : null;
-  if (!primaryLanguage) {
+  const requiresLanguageConfirmation = languageAnalysis.success && languageAnalysis.data.primaryLanguage.requiresConfirmation;
+  if (!primaryLanguage || requiresLanguageConfirmation) {
     await markBlueprintNeedsReview({
       blueprintDocumentId: blueprintDocument.id,
-      error: "A primary language must be selected before Blueprint rules can be extracted."
+      error: "A primary language must be selected or confirmed before Blueprint rules can be extracted."
     });
     return;
   }

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Archive, ClipboardCheck, FileUp, ListChecks } from "lucide-react";
+import { Archive, BookOpenCheck, ClipboardCheck, FileUp, ListChecks } from "lucide-react";
 
 import "./globals.css";
 
@@ -27,6 +27,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/review">
                 <ClipboardCheck size={18} aria-hidden="true" />
                 Review
+              </Link>
+              <Link href="/blueprints">
+                <BookOpenCheck size={18} aria-hidden="true" />
+                Blueprints
               </Link>
               <Link href="/questions">
                 <Archive size={18} aria-hidden="true" />

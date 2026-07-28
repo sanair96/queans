@@ -275,6 +275,100 @@ describe("Blueprint API routes", () => {
     }
   });
 
+  it("confirms a detected primary language and keeps language analysis in sync", async () => {
+    mocks.prisma.blueprintDocument.findUnique
+      .mockResolvedValueOnce({
+        status: "NEEDS_REVIEW",
+        languageDetectionMetadata: {
+          detectedLanguages: [
+            { tag: "en", confidence: 0.98, pageNumbers: [1] },
+            { tag: "hi", confidence: 0.95, pageNumbers: [2] }
+          ],
+          primaryLanguage: { tag: "en", source: "INFERRED", confidence: 0.7, requiresConfirmation: true },
+          mixedLanguagePageNumbers: [],
+          multilingualRelationship: "DUPLICATE_TRANSLATIONS"
+        }
+      })
+      .mockResolvedValueOnce({
+        id: "blueprint-1",
+        uploadObjectId: "upload-1",
+        originalFilename: "class-x.pdf",
+        title: "Class X",
+        documentType: "Blueprint",
+        board: "CBSE",
+        subject: null,
+        academicLevel: null,
+        detectedLanguages: null,
+        primaryLanguage: "hi",
+        primaryLanguageSource: "USER_CONFIRMED",
+        languageDetectionMetadata: null,
+        status: "NEEDS_REVIEW",
+        pageCount: 2,
+        draftRulesJson: null,
+        approvedRulesJson: null,
+        extractionMetadataJson: null,
+        confidenceSummaryJson: null,
+        extractionError: "A primary language must be selected or confirmed before Blueprint rules can be extracted.",
+        reviewVersion: 0,
+        approvedAt: null,
+        approvedBy: null,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+    mocks.prisma.blueprintDocument.updateMany.mockResolvedValue({ count: 1 });
+    const app = await buildServer(apiConfig);
+
+    try {
+      const response = await app.inject({
+        method: "PUT",
+        url: "/api/blueprints/blueprint-1/primary-language",
+        payload: { primaryLanguage: "hi" }
+      });
+
+      expect(response.statusCode).toBe(200);
+      const updateCall: unknown = mocks.prisma.blueprintDocument.updateMany.mock.calls[0]?.[0];
+      expect(updateCall).toMatchObject({
+        where: { id: "blueprint-1", status: { not: "APPROVED" } },
+        data: {
+          primaryLanguage: "hi",
+          primaryLanguageSource: "USER_CONFIRMED",
+          languageDetectionMetadata: {
+            primaryLanguage: { tag: "hi", source: "USER_CONFIRMED", confidence: 1, requiresConfirmation: false }
+          }
+        }
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("does not allow confirmation of a language absent from the detected-language evidence", async () => {
+    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({
+      status: "NEEDS_REVIEW",
+      languageDetectionMetadata: {
+        detectedLanguages: [{ tag: "en", confidence: 0.98, pageNumbers: [1] }],
+        primaryLanguage: { tag: null, source: "UNRESOLVED", confidence: null, requiresConfirmation: true },
+        mixedLanguagePageNumbers: [],
+        multilingualRelationship: "MIXED_OR_UNCERTAIN"
+      }
+    });
+    const app = await buildServer(apiConfig);
+
+    try {
+      const response = await app.inject({
+        method: "PUT",
+        url: "/api/blueprints/blueprint-1/primary-language",
+        payload: { primaryLanguage: "hi" }
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ error: "BLUEPRINT_PRIMARY_LANGUAGE_NOT_DETECTED" });
+      expect(mocks.prisma.blueprintDocument.updateMany).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
   it("lists Blueprint metadata with board/status filters and a stable next cursor", async () => {
     mocks.prisma.blueprintDocument.findMany.mockResolvedValue([
       {
