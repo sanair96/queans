@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 
 import { assertOk } from "../api-errors";
 import { apiBaseUrl } from "../api-client";
+import { BlueprintJsonEditor, isBlueprintJsonValue, type BlueprintJsonValue } from "./blueprint-json-editor";
 
 interface LanguageEvidence {
   tag: string;
@@ -64,6 +65,9 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
   const [selectedLanguage, setSelectedLanguage] = useState(blueprint.primaryLanguage ?? "");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [editedRules, setEditedRules] = useState<BlueprintJsonValue | undefined>(() =>
+    isBlueprintJsonValue(initialBlueprint.draftRulesJson) ? initialBlueprint.draftRulesJson : undefined
+  );
   const selectedPage = useMemo(
     () => initialPages.find((page) => page.pageNumber === selectedPageNumber) ?? initialPages[0],
     [initialPages, selectedPageNumber]
@@ -179,23 +183,22 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
           {selectedPage ? <pre>{selectedPage.markdownText}</pre> : <p className="muted">OCR pages are still being prepared.</p>}
         </article>
         <article className="panel blueprint-rules-preview">
-          <div className="blueprint-pane-title"><PanelRightOpen size={17} aria-hidden="true" /><h2>Rule preview</h2></div>
-          {blueprint.draftRulesJson === null ? (
+          <div className="blueprint-pane-title"><PanelRightOpen size={17} aria-hidden="true" /><h2>Rule editor</h2></div>
+          {editedRules === undefined ? (
             <div className="blueprint-preview-empty">
               <strong>Rule draft pending</strong>
               <p className="muted">The extracted Blueprint structure appears here after rule extraction completes.</p>
             </div>
           ) : (
-            <pre>{prettyJson(blueprint.draftRulesJson)}</pre>
+            <>
+              <p className="editor-caption">Changes stay in this review session until draft saving is added in Phase 9.</p>
+              <BlueprintJsonEditor value={editedRules} onChange={setEditedRules} />
+            </>
           )}
         </article>
       </section>
     </>
   );
-}
-
-function prettyJson(value: unknown) {
-  return JSON.stringify(value, null, 2);
 }
 
 function formatStatus(status: string) {

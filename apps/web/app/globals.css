@@ -1232,6 +1232,166 @@ h2 {
   color: #e7f4ec;
 }
 
+.editor-caption {
+  margin: 12px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.json-editor-node {
+  min-width: 0;
+}
+
+.json-editor-node.collection {
+  border-left: 2px solid #bfd7ca;
+  padding-left: 8px;
+}
+
+.json-editor-node + .json-editor-node,
+.json-object-entry + .json-object-entry {
+  margin-top: 8px;
+}
+
+.json-editor-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+}
+
+.json-expand,
+.json-delete {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.json-expand:hover,
+.json-delete:hover {
+  background: #e8f2ec;
+  color: var(--accent-strong);
+}
+
+.json-delete:hover {
+  background: #fff0ec;
+  color: var(--danger);
+}
+
+.json-expand-spacer {
+  width: 26px;
+}
+
+.json-node-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #31473d;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.json-kind-select {
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fffefa;
+  color: var(--muted);
+  padding: 4px 6px;
+  font-size: 11px;
+}
+
+.json-editor-children {
+  display: grid;
+  gap: 8px;
+  margin: 7px 0 4px 11px;
+}
+
+.json-object-entry {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.38fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.json-key-input,
+.json-number-input,
+.json-text-input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fffefa;
+  color: var(--ink);
+  padding: 6px 7px;
+}
+
+.json-key-input {
+  margin-top: 3px;
+  color: #315346;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.json-text-input {
+  display: block;
+  min-height: 56px;
+  margin: 6px 0 3px 33px;
+  resize: vertical;
+}
+
+.json-number-input {
+  display: block;
+  max-width: 160px;
+  margin: 6px 0 3px 33px;
+}
+
+.json-boolean-input,
+.json-null-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 3px 33px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.json-boolean-input input {
+  accent-color: var(--accent);
+}
+
+.json-null-value {
+  color: #8a5b54;
+  font-style: italic;
+}
+
+.json-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: max-content;
+  border: 1px dashed #a8c5b5;
+  border-radius: 4px;
+  background: #f3fbf6;
+  color: #235b48;
+  padding: 5px 7px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.json-add:hover {
+  border-style: solid;
+  background: #e5f5eb;
+}
+
 .blueprint-preview-empty {
   display: grid;
   min-height: 540px;
@@ -1310,6 +1470,14 @@ h2 {
 
   .blueprint-preview-empty {
     min-height: 260px;
+  }
+
+  .json-object-entry {
+    grid-template-columns: 1fr;
+  }
+
+  .json-key-input {
+    margin: 0;
   }
 
   .language-decision {
