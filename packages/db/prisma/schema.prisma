@@ -27,9 +27,8 @@ enum BlueprintDocumentStatus {
   UPLOADED
   QUEUED
   PROCESSING
-  READY_FOR_APPROVAL
+  READY
   NEEDS_REVIEW
-  APPROVED
   FAILED
 }
 
@@ -261,14 +260,11 @@ model BlueprintDocument {
   status                    BlueprintDocumentStatus        @default(UPLOADED)
   pageCount                 Int?                           @map("page_count")
   draftRulesJson            Json?                          @map("draft_rules_json")
-  approvedRulesJson         Json?                          @map("approved_rules_json")
   rawExtractionJson         Json?                          @map("raw_extraction_json")
   extractionMetadataJson    Json?                          @map("extraction_metadata_json")
   confidenceSummaryJson     Json?                          @map("confidence_summary_json")
   extractionError           String?                        @map("extraction_error")
   reviewVersion             Int                            @default(0) @map("review_version")
-  approvedAt                DateTime?                      @map("approved_at")
-  approvedBy                String?                        @map("approved_by")
   createdAt                 DateTime                       @default(now()) @map("created_at")
   updatedAt                 DateTime                       @updatedAt @map("updated_at")
 

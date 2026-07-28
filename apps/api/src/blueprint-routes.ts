@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 
 import {
+  blueprintDraftSaveSchema,
   blueprintDocumentStatuses,
   blueprintLanguageAnalysisSchema,
   blueprintLanguageTagSchema,
@@ -246,12 +247,32 @@ export function registerBlueprintRoutes(app: FastifyInstance) {
     };
   });
 
+  app.get("/api/blueprints/saved", async () => {
+    const documents = await prisma.blueprintDocument.findMany({
+      where: { status: "READY" },
+      orderBy: [{ board: "asc" }, { updatedAt: "desc" }, { id: "desc" }],
+      select: blueprintListSelect
+    });
+    return { items: documents };
+  });
+
   app.get<{ Params: BlueprintIdParams }>("/api/blueprints/:id", async (request, reply) => {
     const blueprintDocument = await prisma.blueprintDocument.findUnique({ where: { id: request.params.id } });
     if (!blueprintDocument) {
       return reply.code(404).send({ error: "BLUEPRINT_NOT_FOUND" });
     }
     return blueprintDetailPayload(blueprintDocument);
+  });
+
+  app.get<{ Params: BlueprintIdParams }>("/api/blueprints/:id/rules", async (request, reply) => {
+    const blueprintDocument = await prisma.blueprintDocument.findUnique({ where: { id: request.params.id } });
+    if (!blueprintDocument) {
+      return reply.code(404).send({ error: "BLUEPRINT_NOT_FOUND" });
+    }
+    if (blueprintDocument.status !== "READY") {
+      return reply.code(409).send({ error: "BLUEPRINT_RULES_NOT_SAVED" });
+    }
+    return blueprintSavedRulesPayload(blueprintDocument);
   });
 
   app.get<{ Params: BlueprintIdParams }>("/api/blueprints/:id/status", async (request, reply) => {
@@ -289,18 +310,11 @@ export function registerBlueprintRoutes(app: FastifyInstance) {
     const input = blueprintMetadataPatchSchema.parse(request.body);
     const data = blueprintMetadataUpdateData(input);
     const update = await prisma.blueprintDocument.updateMany({
-      where: { id: request.params.id, status: { not: "APPROVED" } },
+      where: { id: request.params.id },
       data
     });
     if (update.count === 0) {
-      const blueprintDocument = await prisma.blueprintDocument.findUnique({
-        where: { id: request.params.id },
-        select: { status: true }
-      });
-      if (!blueprintDocument) {
-        return reply.code(404).send({ error: "BLUEPRINT_NOT_FOUND" });
-      }
-      return reply.code(409).send({ error: "BLUEPRINT_APPROVED_IMMUTABLE" });
+      return reply.code(404).send({ error: "BLUEPRINT_NOT_FOUND" });
     }
 
     const blueprintDocument = await prisma.blueprintDocument.findUnique({ where: { id: request.params.id } });
@@ -319,10 +333,6 @@ export function registerBlueprintRoutes(app: FastifyInstance) {
     if (!blueprintDocument) {
       return reply.code(404).send({ error: "BLUEPRINT_NOT_FOUND" });
     }
-    if (blueprintDocument.status === "APPROVED") {
-      return reply.code(409).send({ error: "BLUEPRINT_APPROVED_IMMUTABLE" });
-    }
-
     const languageAnalysis = blueprintLanguageAnalysisSchema.safeParse(blueprintDocument.languageDetectionMetadata);
     if (!languageAnalysis.success) {
       return reply.code(409).send({ error: "BLUEPRINT_LANGUAGE_ANALYSIS_NOT_READY" });
@@ -344,7 +354,7 @@ export function registerBlueprintRoutes(app: FastifyInstance) {
       }
     };
     await prisma.blueprintDocument.updateMany({
-      where: { id: request.params.id, status: { not: "APPROVED" } },
+      where: { id: request.params.id },
       data: {
         primaryLanguage: input.primaryLanguage,
         primaryLanguageSource: "USER_CONFIRMED",
@@ -357,6 +367,40 @@ export function registerBlueprintRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: "BLUEPRINT_NOT_FOUND" });
     }
     return blueprintDetailPayload(updatedBlueprintDocument);
+  });
+
+  app.put<{ Params: BlueprintIdParams }>("/api/blueprints/:id/rules", async (request, reply) => {
+    const input = blueprintDraftSaveSchema.parse(request.body);
+    const update = await prisma.blueprintDocument.updateMany({
+      where: { id: request.params.id, status: "READY", reviewVersion: input.reviewVersion },
+      data: {
+        draftRulesJson: blueprintRulesInputJson(input.rules),
+        reviewVersion: { increment: 1 },
+        extractionError: null
+      }
+    });
+    if (update.count === 0) {
+      const blueprintDocument = await prisma.blueprintDocument.findUnique({
+        where: { id: request.params.id },
+        select: { status: true, reviewVersion: true }
+      });
+      if (!blueprintDocument) {
+        return reply.code(404).send({ error: "BLUEPRINT_NOT_FOUND" });
+      }
+      if (blueprintDocument.status !== "READY") {
+        return reply.code(409).send({ error: "BLUEPRINT_NOT_READY" });
+      }
+      return reply.code(409).send({
+        error: "BLUEPRINT_REVIEW_VERSION_CONFLICT",
+        currentReviewVersion: blueprintDocument.reviewVersion
+      });
+    }
+
+    const blueprintDocument = await prisma.blueprintDocument.findUnique({ where: { id: request.params.id } });
+    if (!blueprintDocument) {
+      return reply.code(404).send({ error: "BLUEPRINT_NOT_FOUND" });
+    }
+    return blueprintDetailPayload(blueprintDocument);
   });
 }
 
@@ -371,7 +415,6 @@ const blueprintListSelect = {
   primaryLanguageSource: true,
   status: true,
   pageCount: true,
-  approvedAt: true,
   createdAt: true,
   updatedAt: true
 } satisfies Prisma.BlueprintDocumentSelect;
@@ -431,21 +474,37 @@ export function blueprintDetailPayload(blueprintDocument: {
   status: string;
   pageCount: number | null;
   draftRulesJson: Prisma.JsonValue | null;
-  approvedRulesJson: Prisma.JsonValue | null;
   extractionMetadataJson: Prisma.JsonValue | null;
   confidenceSummaryJson: Prisma.JsonValue | null;
   extractionError: string | null;
   reviewVersion: number;
-  approvedAt: Date | null;
-  approvedBy: string | null;
   createdAt: Date;
   updatedAt: Date;
 }) {
-  const { draftRulesJson, approvedRulesJson, ...metadata } = blueprintDocument;
+  return blueprintDocument;
+}
+
+export function blueprintSavedRulesPayload(blueprintDocument: {
+  id: string;
+  title: string | null;
+  board: string;
+  subject: string | null;
+  academicLevel: string | null;
+  primaryLanguage: string | null;
+  draftRulesJson: Prisma.JsonValue | null;
+  reviewVersion: number;
+  updatedAt: Date;
+}) {
   return {
-    ...metadata,
-    draftRulesJson: blueprintDocument.status === "APPROVED" ? null : draftRulesJson,
-    approvedRulesJson: blueprintDocument.status === "APPROVED" ? approvedRulesJson : null
+    id: blueprintDocument.id,
+    title: blueprintDocument.title,
+    board: blueprintDocument.board,
+    subject: blueprintDocument.subject,
+    academicLevel: blueprintDocument.academicLevel,
+    primaryLanguage: blueprintDocument.primaryLanguage,
+    rules: blueprintDocument.draftRulesJson,
+    reviewVersion: blueprintDocument.reviewVersion,
+    updatedAt: blueprintDocument.updatedAt
   };
 }
 
@@ -476,6 +535,10 @@ function blueprintMetadataUpdateData(input: z.output<typeof blueprintMetadataPat
       }
       : {})
   } satisfies Prisma.BlueprintDocumentUpdateManyMutationInput;
+}
+
+function blueprintRulesInputJson(value: unknown) {
+  return value === null ? Prisma.JsonNull : toInputJson(value);
 }
 
 function buildBlueprintObjectKey(fileName: string) {

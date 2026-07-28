@@ -993,6 +993,19 @@ h2 {
   gap: 10px;
 }
 
+.blueprint-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.btn.compact {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .blueprint-board-head h2,
 .blueprint-pane-title h2 {
   margin-bottom: 0;

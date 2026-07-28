@@ -203,13 +203,19 @@ export const blueprintExtractionEnvelopeSchema = z.object({
   providerMetadata: blueprintRulesJsonSchema.optional()
 });
 
+export const blueprintDraftSaveSchema = z
+  .object({
+    rules: blueprintRulesJsonSchema,
+    reviewVersion: z.number().int().nonnegative()
+  })
+  .strict();
+
 export const blueprintDocumentStatuses = [
   "UPLOADED",
   "QUEUED",
   "PROCESSING",
-  "READY_FOR_APPROVAL",
+  "READY",
   "NEEDS_REVIEW",
-  "APPROVED",
   "FAILED"
 ] as const;
 
@@ -229,9 +235,7 @@ export const blueprintDocumentMetadataSchema = z.object({
   confidenceSummary: blueprintRulesJsonSchema.nullable(),
   extractionMetadata: blueprintRulesJsonSchema.nullable(),
   extractionError: z.string().max(10_000).nullable(),
-  reviewVersion: z.number().int().nonnegative(),
-  approvedAt: z.date().nullable(),
-  approvedBy: z.string().trim().min(1).max(512).nullable()
+  reviewVersion: z.number().int().nonnegative()
 });
 
 export type BlueprintLanguageTag = z.output<typeof blueprintLanguageTagSchema>;

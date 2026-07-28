@@ -124,9 +124,7 @@ describe("blueprint metadata and source references", () => {
       confidenceSummary: null,
       extractionMetadata: null,
       extractionError: null,
-      reviewVersion: 0,
-      approvedAt: null,
-      approvedBy: null
+      reviewVersion: 0
     });
 
     expect(metadata.board).toBe("General");

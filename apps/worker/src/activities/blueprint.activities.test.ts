@@ -138,7 +138,7 @@ describe("Blueprint workflow lifecycle activities", () => {
     const completionCall: unknown = mocks.prisma.blueprintDocument.updateMany.mock.calls[0]?.[0];
     expect(completionCall).toMatchObject({
       where: { id: "blueprint-1", status: "PROCESSING" },
-      data: { status: "READY_FOR_APPROVAL" }
+      data: { status: "READY" }
     });
   });
 

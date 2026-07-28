@@ -317,7 +317,7 @@ export async function completeBlueprintWorkflow(input: BlueprintIngestionWorkflo
         status: "PROCESSING",
         draftRulesJson: { not: Prisma.DbNull }
       },
-      data: { status: "READY_FOR_APPROVAL" }
+      data: { status: "READY" }
     }),
     prisma.workflowEvent.create({
       data: {

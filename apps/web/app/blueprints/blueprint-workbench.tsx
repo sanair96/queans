@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Check, ChevronLeft, FileText, Languages, PanelRightOpen } from "lucide-react";
+import { Check, ChevronLeft, FileText, Languages, PanelRightOpen, Save } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { assertOk } from "../api-errors";
@@ -40,9 +40,9 @@ export interface BlueprintDocument {
   status: string;
   pageCount: number | null;
   draftRulesJson: unknown;
-  approvedRulesJson: unknown;
   extractionMetadataJson: unknown;
   extractionError: string | null;
+  reviewVersion: number;
 }
 
 export interface BlueprintOcrPage {
@@ -68,6 +68,11 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
   const [editedRules, setEditedRules] = useState<BlueprintJsonValue | undefined>(() =>
     isBlueprintJsonValue(initialBlueprint.draftRulesJson) ? initialBlueprint.draftRulesJson : undefined
   );
+  const [savedRules, setSavedRules] = useState<BlueprintJsonValue | undefined>(() =>
+    isBlueprintJsonValue(initialBlueprint.draftRulesJson) ? initialBlueprint.draftRulesJson : undefined
+  );
+  const [savingRules, setSavingRules] = useState(false);
+  const [rulesNotice, setRulesNotice] = useState("");
   const selectedPage = useMemo(
     () => initialPages.find((page) => page.pageNumber === selectedPageNumber) ?? initialPages[0],
     [initialPages, selectedPageNumber]
@@ -76,6 +81,7 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
   const requiresLanguageDecision = Boolean(
     languageAnalysis && (!languageAnalysis.primaryLanguage.tag || languageAnalysis.primaryLanguage.requiresConfirmation)
   );
+  const rulesDirty = JSON.stringify(editedRules) !== JSON.stringify(savedRules);
 
   async function confirmPrimaryLanguage() {
     if (!selectedLanguage) {
@@ -100,6 +106,37 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
       setNotice(error instanceof Error ? error.message : "Primary language could not be confirmed.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function saveRules() {
+    if (editedRules === undefined || !rulesDirty) {
+      return;
+    }
+
+    setSavingRules(true);
+    setRulesNotice("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/blueprints/${blueprint.id}/rules`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rules: editedRules, reviewVersion: blueprint.reviewVersion })
+      });
+      if (response.status === 409) {
+        setRulesNotice("This Blueprint changed elsewhere. Reload the page before saving your edits.");
+        return;
+      }
+      await assertOk(response, "Blueprint save");
+      const updated = (await response.json()) as BlueprintDocument;
+      setBlueprint(updated);
+      const updatedRules = isBlueprintJsonValue(updated.draftRulesJson) ? updated.draftRulesJson : undefined;
+      setEditedRules(updatedRules);
+      setSavedRules(updatedRules);
+      setRulesNotice("Saved.");
+    } catch (error) {
+      setRulesNotice(error instanceof Error ? error.message : "Blueprint rules could not be saved.");
+    } finally {
+      setSavingRules(false);
     }
   }
 
@@ -183,7 +220,13 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
           {selectedPage ? <pre>{selectedPage.markdownText}</pre> : <p className="muted">OCR pages are still being prepared.</p>}
         </article>
         <article className="panel blueprint-rules-preview">
-          <div className="blueprint-pane-title"><PanelRightOpen size={17} aria-hidden="true" /><h2>Rule editor</h2></div>
+          <div className="blueprint-pane-head">
+            <div className="blueprint-pane-title"><PanelRightOpen size={17} aria-hidden="true" /><h2>Rule editor</h2></div>
+            <button className="btn compact" disabled={savingRules || !rulesDirty || editedRules === undefined || blueprint.status !== "READY"} type="button" onClick={() => void saveRules()}>
+              <Save size={15} aria-hidden="true" />
+              {savingRules ? "Saving" : "Save changes"}
+            </button>
+          </div>
           {editedRules === undefined ? (
             <div className="blueprint-preview-empty">
               <strong>Rule draft pending</strong>
@@ -191,8 +234,9 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
             </div>
           ) : (
             <>
-              <p className="editor-caption">Changes stay in this review session until draft saving is added in Phase 9.</p>
+              <p className="editor-caption">{rulesDirty ? "Unsaved changes" : "All changes saved"}</p>
               <BlueprintJsonEditor value={editedRules} onChange={setEditedRules} />
+              {rulesNotice ? <div className="status compact">{rulesNotice}</div> : null}
             </>
           )}
         </article>

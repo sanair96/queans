@@ -224,7 +224,7 @@ describe("Blueprint API routes", () => {
     }
   });
 
-  it("returns only the approved rules after approval", () => {
+  it("returns editable rules for a ready Blueprint", () => {
     const payload = blueprintDetailPayload({
       id: "blueprint-1",
       uploadObjectId: "upload-1",
@@ -238,27 +238,33 @@ describe("Blueprint API routes", () => {
       primaryLanguage: "hi",
       primaryLanguageSource: "USER_CONFIRMED",
       languageDetectionMetadata: null,
-      status: "APPROVED",
+      status: "READY",
       pageCount: 2,
       draftRulesJson: { changed: true },
-      approvedRulesJson: { approved: true },
       extractionMetadataJson: null,
       confidenceSummaryJson: null,
       extractionError: null,
       reviewVersion: 1,
-      approvedAt: null,
-      approvedBy: null,
       createdAt: new Date(),
       updatedAt: new Date()
     });
 
-    expect(payload.draftRulesJson).toBeNull();
-    expect(payload.approvedRulesJson).toEqual({ approved: true });
+    expect(payload.draftRulesJson).toEqual({ changed: true });
   });
 
-  it("rejects metadata changes after approval", async () => {
-    mocks.prisma.blueprintDocument.updateMany.mockResolvedValue({ count: 0 });
-    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({ status: "APPROVED" });
+  it("allows metadata changes after rules are saved", async () => {
+    mocks.prisma.blueprintDocument.updateMany.mockResolvedValue({ count: 1 });
+    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({
+      id: "blueprint-1",
+      title: "Class X",
+      board: "ICSE",
+      subject: null,
+      academicLevel: null,
+      primaryLanguage: "hi",
+      primaryLanguageSource: "USER_CONFIRMED",
+      status: "READY",
+      updatedAt: new Date()
+    });
     const app = await buildServer(apiConfig);
 
     try {
@@ -268,8 +274,8 @@ describe("Blueprint API routes", () => {
         payload: { board: "ICSE" }
       });
 
-      expect(response.statusCode).toBe(409);
-      expect(response.json()).toEqual({ error: "BLUEPRINT_APPROVED_IMMUTABLE" });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ board: "ICSE", status: "READY" });
     } finally {
       await app.close();
     }
@@ -305,13 +311,10 @@ describe("Blueprint API routes", () => {
         status: "NEEDS_REVIEW",
         pageCount: 2,
         draftRulesJson: null,
-        approvedRulesJson: null,
         extractionMetadataJson: null,
         confidenceSummaryJson: null,
         extractionError: "A primary language must be selected or confirmed before Blueprint rules can be extracted.",
         reviewVersion: 0,
-        approvedAt: null,
-        approvedBy: null,
         createdAt: new Date(),
         updatedAt: new Date()
       });
@@ -328,7 +331,7 @@ describe("Blueprint API routes", () => {
       expect(response.statusCode).toBe(200);
       const updateCall: unknown = mocks.prisma.blueprintDocument.updateMany.mock.calls[0]?.[0];
       expect(updateCall).toMatchObject({
-        where: { id: "blueprint-1", status: { not: "APPROVED" } },
+        where: { id: "blueprint-1" },
         data: {
           primaryLanguage: "hi",
           primaryLanguageSource: "USER_CONFIRMED",
@@ -369,6 +372,115 @@ describe("Blueprint API routes", () => {
     }
   });
 
+  it("saves an editable generic rules document with its current review version", async () => {
+    mocks.prisma.blueprintDocument.updateMany.mockResolvedValue({ count: 1 });
+    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({
+      id: "blueprint-1",
+      uploadObjectId: "upload-1",
+      originalFilename: "class-x.pdf",
+      title: "Class X",
+      documentType: "Blueprint",
+      board: "CBSE",
+      subject: null,
+      academicLevel: null,
+      detectedLanguages: null,
+      primaryLanguage: "hi",
+      primaryLanguageSource: "USER_CONFIRMED",
+      languageDetectionMetadata: null,
+      status: "READY",
+      pageCount: 2,
+      draftRulesJson: { sections: [{ label: "खंड अ", marks: 10 }] },
+      extractionMetadataJson: null,
+      confidenceSummaryJson: null,
+      extractionError: null,
+      reviewVersion: 4,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+    const app = await buildServer(apiConfig);
+
+    try {
+      const response = await app.inject({
+        method: "PUT",
+        url: "/api/blueprints/blueprint-1/rules",
+        payload: { rules: { sections: [{ label: "खंड अ", marks: 10 }] }, reviewVersion: 3 }
+      });
+
+      expect(response.statusCode).toBe(200);
+      const updateCall: unknown = mocks.prisma.blueprintDocument.updateMany.mock.calls[0]?.[0];
+      expect(updateCall).toMatchObject({
+        where: { id: "blueprint-1", status: "READY", reviewVersion: 3 },
+        data: { reviewVersion: { increment: 1 }, extractionError: null }
+      });
+      expect(response.json()).toMatchObject({ reviewVersion: 4, draftRulesJson: { sections: [{ marks: 10 }] } });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reports a version conflict without overwriting newer Blueprint rules", async () => {
+    mocks.prisma.blueprintDocument.updateMany.mockResolvedValue({ count: 0 });
+    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({ status: "READY", reviewVersion: 7 });
+    const app = await buildServer(apiConfig);
+
+    try {
+      const response = await app.inject({
+        method: "PUT",
+        url: "/api/blueprints/blueprint-1/rules",
+        payload: { rules: "new rules", reviewVersion: 6 }
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({ error: "BLUEPRINT_REVIEW_VERSION_CONFLICT", currentReviewVersion: 7 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("exposes saved Blueprint rules without coupling them to paper ingestion", async () => {
+    mocks.prisma.blueprintDocument.findMany.mockResolvedValue([
+      {
+        id: "blueprint-1",
+        title: "Class X",
+        originalFilename: "class-x.pdf",
+        board: "CBSE",
+        subject: "Mathematics",
+        academicLevel: "10",
+        primaryLanguage: "hi",
+        primaryLanguageSource: "USER_CONFIRMED",
+        status: "READY",
+        pageCount: 2,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    ]);
+    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({
+      id: "blueprint-1",
+      title: "Class X",
+      board: "CBSE",
+      subject: "Mathematics",
+      academicLevel: "10",
+      primaryLanguage: "hi",
+      status: "READY",
+      draftRulesJson: { duration: "3 hours" },
+      reviewVersion: 2,
+      updatedAt: new Date()
+    });
+    const app = await buildServer(apiConfig);
+
+    try {
+      const listResponse = await app.inject({ method: "GET", url: "/api/blueprints/saved" });
+      const rulesResponse = await app.inject({ method: "GET", url: "/api/blueprints/blueprint-1/rules" });
+
+      expect(listResponse.statusCode).toBe(200);
+      expect(listResponse.json()).toMatchObject({ items: [{ id: "blueprint-1", status: "READY" }] });
+      expect(rulesResponse.statusCode).toBe(200);
+      expect(rulesResponse.json()).toMatchObject({ id: "blueprint-1", rules: { duration: "3 hours" }, reviewVersion: 2 });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("lists Blueprint metadata with board/status filters and a stable next cursor", async () => {
     mocks.prisma.blueprintDocument.findMany.mockResolvedValue([
       {
@@ -382,7 +494,6 @@ describe("Blueprint API routes", () => {
         primaryLanguageSource: "INFERRED",
         status: "QUEUED",
         pageCount: null,
-        approvedAt: null,
         createdAt: new Date("2026-07-25T10:00:00.000Z"),
         updatedAt: new Date("2026-07-25T10:00:00.000Z")
       },
@@ -397,7 +508,6 @@ describe("Blueprint API routes", () => {
         primaryLanguageSource: "INFERRED",
         status: "QUEUED",
         pageCount: null,
-        approvedAt: null,
         createdAt: new Date("2026-07-24T10:00:00.000Z"),
         updatedAt: new Date("2026-07-24T10:00:00.000Z")
       }
