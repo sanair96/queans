@@ -11,12 +11,15 @@ const mocks = vi.hoisted(() => ({
   r2: { createPresignedRead: vi.fn() },
   ocr: { processDocumentUrl: vi.fn() },
   languageAnalysis: { analyzePages: vi.fn() },
+  blueprintExtraction: { extractRules: vi.fn() },
+  parseBlueprintExtraction: vi.fn(),
+  createPersistedBlueprintExtraction: vi.fn(),
   loadR2ConfigFromEnv: vi.fn(),
   loadMistralConfigFromEnv: vi.fn()
 }));
 
 vi.mock("@queans/db", () => ({
-  Prisma: { JsonNull: null },
+  Prisma: { JsonNull: null, DbNull: "DB_NULL" },
   prisma: mocks.prisma
 }));
 
@@ -32,6 +35,14 @@ vi.mock("@queans/providers", () => ({
   },
   MistralBlueprintLanguageAnalyzer: class {
     analyzePages = mocks.languageAnalysis.analyzePages;
+  },
+  createBlueprintRuleExtractorFromEnv: () => ({ extractRules: mocks.blueprintExtraction.extractRules }),
+  createPersistedBlueprintExtraction: mocks.createPersistedBlueprintExtraction,
+  parsePersistedBlueprintExtraction: mocks.parseBlueprintExtraction,
+  BlueprintExtractionResponseError: class BlueprintExtractionResponseError extends Error {
+    constructor(message: string, readonly rawJson: unknown) {
+      super(message);
+    }
   }
 }));
 
@@ -39,14 +50,41 @@ const {
   analyzeBlueprintStructure,
   beginBlueprintWorkflow,
   completeBlueprintWorkflow,
+  extractBlueprintRules,
   failBlueprintWorkflow,
-  ocrBlueprintDocument
+  ocrBlueprintDocument,
+  persistBlueprintDraft
 } = await import("./blueprint.activities.js");
+const { BlueprintExtractionResponseError } = await import("@queans/providers");
 
 const input = {
   workflowRunId: "run-1",
   blueprintDocumentId: "blueprint-1"
 };
+
+const persistedLanguageAnalysis = {
+  detectedLanguages: [{ tag: "hi", confidence: 0.99, pageNumbers: [1] }],
+  primaryLanguage: { tag: "hi", source: "USER_CONFIRMED", confidence: 1, requiresConfirmation: false },
+  mixedLanguagePageNumbers: [],
+  multilingualRelationship: "MONOLINGUAL"
+};
+
+function persistedExtractionFromMockResult(result: unknown) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new Error("Expected a Blueprint extraction result.");
+  }
+  const record = result as Record<string, unknown>;
+  return {
+    provider: record.provider,
+    model: record.model,
+    rules: record.rules,
+    confidence: record.confidence,
+    sourceReferences: record.sourceReferences,
+    warnings: record.warnings,
+    usage: record.usage,
+    rawProviderResponse: record.rawJson
+  };
+}
 
 describe("Blueprint workflow lifecycle activities", () => {
   beforeEach(() => {
@@ -61,6 +99,10 @@ describe("Blueprint workflow lifecycle activities", () => {
     mocks.r2.createPresignedRead.mockReset();
     mocks.ocr.processDocumentUrl.mockReset();
     mocks.languageAnalysis.analyzePages.mockReset();
+    mocks.blueprintExtraction.extractRules.mockReset();
+    mocks.parseBlueprintExtraction.mockReset();
+    mocks.createPersistedBlueprintExtraction.mockReset();
+    mocks.createPersistedBlueprintExtraction.mockImplementation(persistedExtractionFromMockResult);
     mocks.loadR2ConfigFromEnv.mockReset();
     mocks.loadMistralConfigFromEnv.mockReset();
     mocks.prisma.$transaction.mockResolvedValue([]);
@@ -222,6 +264,151 @@ describe("Blueprint workflow lifecycle activities", () => {
         primaryLanguage: "en",
         primaryLanguageSource: "INFERRED",
         languageDetectionMetadata: { multilingualRelationship: "DUPLICATE_TRANSLATIONS" }
+      }
+    });
+  });
+
+  it("extracts native rules in the selected primary language and stores raw provider evidence separately", async () => {
+    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({
+      id: "blueprint-1",
+      languageDetectionMetadata: persistedLanguageAnalysis,
+      ocrPages: [{ pageNumber: 1, markdownText: "# खंड अ\nसभी प्रश्नों के उत्तर दीजिए" }]
+    });
+    mocks.blueprintExtraction.extractRules.mockResolvedValue({
+      provider: "mistral",
+      model: "mistral-small-latest",
+      rules: { "खंड अ": { निर्देश: ["सभी प्रश्नों के उत्तर दीजिए"], अंक: 10 } },
+      confidence: 0.91,
+      sourceReferences: [{ pageNumber: 1, languageTag: "hi", snippet: "सभी प्रश्नों" }],
+      warnings: [],
+      rawJson: { choices: [{ message: { content: "provider response" } }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 }
+    });
+
+    await expect(extractBlueprintRules(input)).resolves.toBeUndefined();
+
+    expect(mocks.blueprintExtraction.extractRules).toHaveBeenCalledWith({
+      primaryLanguage: "hi",
+      pages: [{ pageNumber: 1, markdown: "# खंड अ\nसभी प्रश्नों के उत्तर दीजिए" }]
+    });
+    const extractionUpdate: unknown = mocks.prisma.blueprintDocument.update.mock.calls[0]?.[0];
+    expect(extractionUpdate).toMatchObject({
+      where: { id: "blueprint-1" },
+      data: {
+        rawExtractionJson: {
+          provider: "mistral",
+          model: "mistral-small-latest",
+          rawProviderResponse: { choices: [{ message: { content: "provider response" } }] }
+        },
+        extractionError: null
+      }
+    });
+  });
+
+  it("requires primary-language selection before extraction instead of producing an approvable draft", async () => {
+    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({
+      id: "blueprint-1",
+      languageDetectionMetadata: {
+        ...persistedLanguageAnalysis,
+        primaryLanguage: { tag: null, source: "UNRESOLVED", confidence: null, requiresConfirmation: true }
+      },
+      ocrPages: [{ pageNumber: 1, markdownText: "source" }]
+    });
+
+    await expect(extractBlueprintRules(input)).resolves.toBeUndefined();
+
+    expect(mocks.blueprintExtraction.extractRules).not.toHaveBeenCalled();
+    expect(mocks.prisma.blueprintDocument.update).toHaveBeenCalledWith({
+      where: { id: "blueprint-1" },
+      data: {
+        status: "NEEDS_REVIEW",
+        extractionError: "A primary language must be selected before Blueprint rules can be extracted."
+      }
+    });
+  });
+
+  it("preserves a safe invalid provider response and marks the Blueprint for review", async () => {
+    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({
+      id: "blueprint-1",
+      languageDetectionMetadata: persistedLanguageAnalysis,
+      ocrPages: [{ pageNumber: 1, markdownText: "source" }]
+    });
+    mocks.blueprintExtraction.extractRules.mockRejectedValue(
+      new BlueprintExtractionResponseError("rules must be JSON", { choices: [{ message: { content: "invalid" } }] })
+    );
+
+    await expect(extractBlueprintRules(input)).resolves.toBeUndefined();
+
+    expect(mocks.prisma.blueprintDocument.update).toHaveBeenCalledWith({
+      where: { id: "blueprint-1" },
+      data: {
+        status: "NEEDS_REVIEW",
+        rawExtractionJson: { choices: [{ message: { content: "invalid" } }] },
+        extractionError: "Blueprint extraction response is invalid: rules must be JSON"
+      }
+    });
+  });
+
+  it("keeps raw provider output when extracted rules fail generic JSON validation", async () => {
+    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({
+      id: "blueprint-1",
+      languageDetectionMetadata: persistedLanguageAnalysis,
+      ocrPages: [{ pageNumber: 1, markdownText: "source" }]
+    });
+    mocks.blueprintExtraction.extractRules.mockResolvedValue({
+      provider: "mistral",
+      model: "mistral-small-latest",
+      rules: { invalid: new Date() },
+      confidence: 0.8,
+      sourceReferences: [],
+      warnings: [],
+      rawJson: { choices: [{ message: { content: "provider response" } }] },
+      usage: {}
+    });
+
+    await expect(extractBlueprintRules(input)).resolves.toBeUndefined();
+
+    const reviewUpdate: unknown = mocks.prisma.blueprintDocument.update.mock.calls[0]?.[0];
+    expect(reviewUpdate).toMatchObject({
+      where: { id: "blueprint-1" },
+      data: {
+        status: "NEEDS_REVIEW",
+        rawExtractionJson: {
+          provider: "mistral",
+          model: "mistral-small-latest",
+          rawProviderResponse: { choices: [{ message: { content: "provider response" } }] }
+        }
+      }
+    });
+    expect(JSON.stringify(reviewUpdate)).toContain("Blueprint extraction draft is invalid");
+  });
+
+  it("persists a validated arbitrary JSON draft, including the JSON null primitive", async () => {
+    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({
+      id: "blueprint-1",
+      status: "PROCESSING",
+      languageDetectionMetadata: persistedLanguageAnalysis,
+      rawExtractionJson: { choices: [{ message: { content: "provider response" } }] }
+    });
+    mocks.parseBlueprintExtraction.mockReturnValue({
+      provider: "mistral",
+      model: "mistral-small-latest",
+      rules: null,
+      confidence: 0.8,
+      sourceReferences: [{ pageNumber: 1, languageTag: "hi" }],
+      warnings: ["OCR table boundary uncertain"],
+      usage: {}
+    });
+
+    await expect(persistBlueprintDraft(input)).resolves.toBeUndefined();
+
+    const draftUpdate: unknown = mocks.prisma.blueprintDocument.update.mock.calls[0]?.[0];
+    expect(draftUpdate).toMatchObject({
+      where: { id: "blueprint-1" },
+      data: {
+        draftRulesJson: null,
+        confidenceSummaryJson: { extraction: 0.8 },
+        extractionError: null
       }
     });
   });

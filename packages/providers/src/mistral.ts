@@ -1,6 +1,13 @@
 import { z } from "zod";
 
+import {
+  BlueprintExtractionResponseError,
+  blueprintExtractionJsonSchema,
+  blueprintExtractionSystemPrompt,
+  parseBlueprintExtractionResult
+} from "./blueprint-extraction-contract.js";
 import type {
+  BlueprintExtractionResult,
   BlueprintLanguageAnalysisResult,
   ExtractedQuestionCandidate,
   OcrImage,
@@ -533,6 +540,48 @@ export class MistralBlueprintLanguageAnalyzer {
         totalTokens: completion.usage?.total_tokens
       }
     };
+  }
+}
+
+export class MistralBlueprintRuleExtractor {
+  constructor(private readonly config: MistralConfig) {}
+
+  async extractRules(input: {
+    primaryLanguage: string;
+    pages: Array<{ pageNumber: number; markdown: string }>;
+  }): Promise<BlueprintExtractionResult> {
+    const raw = await callMistral(this.config, "/v1/chat/completions", {
+      model: this.config.extractorModel,
+      temperature: 0,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "blueprint_extraction",
+          strict: true,
+          schema: blueprintExtractionJsonSchema
+        }
+      },
+      messages: [
+        { role: "system", content: blueprintExtractionSystemPrompt },
+        {
+          role: "user",
+          content: [
+            `Designated primary language: ${input.primaryLanguage}`,
+            "OCR pages:",
+            ...input.pages.map((page) => `Page ${page.pageNumber}:\n${page.markdown}`)
+          ].join("\n\n")
+        }
+      ]
+    });
+
+    try {
+      return parseBlueprintExtractionResult(raw, this.config.extractorModel, "mistral");
+    } catch (error) {
+      throw new BlueprintExtractionResponseError(
+        error instanceof Error ? error.message : "Blueprint extraction response was invalid.",
+        raw
+      );
+    }
   }
 }
 

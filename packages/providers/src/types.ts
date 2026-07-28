@@ -70,6 +70,30 @@ export interface BlueprintLanguageAnalysisResult {
   };
 }
 
+export interface BlueprintSourceReferenceResult {
+  pageNumber: number;
+  languageTag?: string | undefined;
+  snippet?: string | undefined;
+  startOffset?: number | undefined;
+  endOffset?: number | undefined;
+  confidence?: number | null | undefined;
+}
+
+export interface BlueprintExtractionResult {
+  provider: "mistral";
+  model: string;
+  rules: unknown;
+  confidence: number | null;
+  sourceReferences: BlueprintSourceReferenceResult[];
+  warnings: string[];
+  rawJson: unknown;
+  usage: {
+    promptTokens?: number | undefined;
+    completionTokens?: number | undefined;
+    totalTokens?: number | undefined;
+  };
+}
+
 export interface ExtractedQuestionCandidate {
   questionNumber?: string | undefined;
   sectionName?: string | undefined;

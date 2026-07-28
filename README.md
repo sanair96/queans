@@ -68,6 +68,8 @@ Provider pricing changes over time. The worker records `provider_run_costs.estim
 
 `LLM_PROVIDER=mistral` is the only supported extractor provider today. Use `EXTRACTOR_MODEL` to choose the cheapest acceptable Mistral extraction model for your quality bar.
 
+Blueprint extraction uses the existing Mistral configuration and `EXTRACTOR_MODEL` setting.
+
 Optional Google Document AI benchmarking needs:
 
 - `DOCUMENT_AI_ENABLED=true`

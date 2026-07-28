@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MistralBatchProvider,
   MistralBlueprintLanguageAnalyzer,
+  MistralBlueprintRuleExtractor,
   parseMistralExtractionContent,
   parseMistralOcrResult
 } from "./mistral.js";
@@ -631,6 +632,68 @@ describe("MistralBlueprintLanguageAnalyzer", () => {
     const messages = request.messages as Array<{ role: string; content: string }>;
     expect(messages[0]?.content).toContain("every language present");
     expect(messages[1]?.content).toContain("Page 2:\n# प्रश्न पत्र");
+  });
+});
+
+describe("MistralBlueprintRuleExtractor", () => {
+  it("preserves arbitrary rule JSON and requires primary-language output with source references", async () => {
+    const fetchCalls: unknown[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (_input, init) => {
+      const body = init?.body;
+      if (typeof body !== "string") {
+        throw new Error("Expected Mistral request body to be serialized JSON.");
+      }
+      fetchCalls.push(JSON.parse(body));
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    rules: {
+                      "खंड अ": { निर्देश: ["सभी प्रश्नों के उत्तर दीजिए"], अंक: 10 },
+                      internalChoice: true
+                    },
+                    confidence: 0.91,
+                    source_references: [{ page_number: 1, language_tag: "hi", snippet: "सभी प्रश्नों" }],
+                    warnings: []
+                  })
+                }
+              }
+            ],
+            usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 }
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+    };
+
+    try {
+      const extractor = new MistralBlueprintRuleExtractor(testMistralConfig);
+      await expect(
+        extractor.extractRules({ primaryLanguage: "hi", pages: [{ pageNumber: 1, markdown: "# खंड अ\nसभी प्रश्नों" }] })
+      ).resolves.toMatchObject({
+        rules: { "खंड अ": { अंक: 10 }, internalChoice: true },
+        sourceReferences: [{ pageNumber: 1, languageTag: "hi" }]
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const request = asRecord(fetchCalls[0]);
+    expect(request.response_format).toMatchObject({
+      type: "json_schema",
+      json_schema: {
+        name: "blueprint_extraction",
+        strict: true,
+        schema: { required: ["rules", "confidence", "source_references", "warnings"] }
+      }
+    });
+    const messages = request.messages as Array<{ role: string; content: string }>;
+    expect(messages[0]?.content).toContain("native hierarchy");
+    expect(messages[1]?.content).toContain("Designated primary language: hi");
   });
 });
 
