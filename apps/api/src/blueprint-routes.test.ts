@@ -590,4 +590,23 @@ describe("Blueprint API helpers", () => {
       actualMimeType: "image/png"
     });
   });
+
+  it("distinguishes client-reported and object-store size mismatches", () => {
+    expect(
+      blueprintUploadCompletionConflict({
+        head: { byteSize: 1024, contentType: "application/pdf" },
+        reportedByteSize: 512,
+        storedByteSize: 1024n,
+        storedMimeType: "application/pdf"
+      })
+    ).toEqual({ error: "UPLOAD_SIZE_MISMATCH" });
+    expect(
+      blueprintUploadCompletionConflict({
+        head: { byteSize: 512, contentType: "application/pdf" },
+        reportedByteSize: 512,
+        storedByteSize: 1024n,
+        storedMimeType: "application/pdf"
+      })
+    ).toEqual({ error: "R2_OBJECT_SIZE_MISMATCH" });
+  });
 });

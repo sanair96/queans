@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { apiGet } from "../api-client";
+import { BlueprintUploadPanel } from "./blueprint-upload-panel";
 
 interface BlueprintListItem {
   id: string;
@@ -29,6 +30,7 @@ export default async function BlueprintsPage() {
           <p className="muted">Review the source pages, confirm the document language, and inspect the extracted rule draft.</p>
         </div>
       </header>
+      <BlueprintUploadPanel />
       {data.error ? (
         <section className="panel empty-state">
           <strong>{data.error}</strong>
