@@ -1,7 +1,7 @@
 "use client";
 
-import { ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { Plus, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
 
 export type BlueprintJsonValue =
   | null
@@ -16,73 +16,120 @@ type JsonKind = "array" | "boolean" | "null" | "number" | "object" | "string";
 interface BlueprintJsonEditorProps {
   value: BlueprintJsonValue;
   onChange: (value: BlueprintJsonValue) => void;
+  disabled?: boolean;
 }
 
-export function BlueprintJsonEditor({ value, onChange }: BlueprintJsonEditorProps) {
-  return <JsonEditorNode label="Blueprint rules" value={value} onChange={onChange} />;
+export interface BlueprintRuleSection {
+  id: string;
+  label: string;
 }
 
-function JsonEditorNode({
+export function blueprintRuleSections(value: BlueprintJsonValue): BlueprintRuleSection[] {
+  if (!isJsonObject(value)) return [{ id: "__root__", label: "Blueprint rules" }];
+  const entries = Object.keys(value);
+  return entries.length > 0 ? entries.map((key) => ({ id: key, label: key })) : [{ id: "__root__", label: "Blueprint rules" }];
+}
+
+export function BlueprintJsonEditor({ value, onChange, disabled = false }: BlueprintJsonEditorProps) {
+  const sections = blueprintRuleSections(value);
+  const [activeSection, setActiveSection] = useState(sections[0]?.id ?? "__root__");
+
+  useEffect(() => {
+    if (!sections.some((section) => section.id === activeSection)) setActiveSection(sections[0]?.id ?? "__root__");
+  }, [activeSection, sections]);
+
+  const rootObject = isJsonObject(value);
+  const sectionValue = rootObject && activeSection !== "__root__" ? value[activeSection] ?? null : value;
+  const sectionLabel = sections.find((section) => section.id === activeSection)?.label ?? "Blueprint rules";
+
+  function updateSection(nextValue: BlueprintJsonValue) {
+    if (rootObject && activeSection !== "__root__") {
+      onChange({ ...value, [activeSection]: nextValue });
+      return;
+    }
+    onChange(nextValue);
+  }
+
+  return (
+    <div className="rule-editor-layout">
+      <nav className="rule-section-nav" aria-label="Rule sections">
+        <span className="rule-section-nav-label">Sections</span>
+        {sections.map((section) => (
+          <button
+            className={`rule-section-tab ${section.id === activeSection ? "active" : ""}`}
+            key={section.id}
+            type="button"
+            onClick={() => setActiveSection(section.id)}
+          >
+            {section.label}
+          </button>
+        ))}
+      </nav>
+      <section className="rule-section-content" aria-label={`${sectionLabel} fields`}>
+        <div className="rule-section-heading">
+          <p className="eyebrow">Editing section</p>
+          <h3>{sectionLabel}</h3>
+        </div>
+        <RuleValueEditor label={sectionLabel} value={sectionValue} onChange={updateSection} disabled={disabled} root />
+      </section>
+    </div>
+  );
+}
+
+function RuleValueEditor({
   label,
   value,
   onChange,
-  onDelete
+  onDelete,
+  onRename,
+  disabled = false,
+  root = false
 }: {
   label: string;
   value: BlueprintJsonValue;
   onChange: (value: BlueprintJsonValue) => void;
   onDelete?: (() => void) | undefined;
+  onRename?: ((value: string) => void) | undefined;
+  disabled?: boolean;
+  root?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(true);
   const kind = jsonKind(value);
-  const isCollection = kind === "array" || kind === "object";
+  const collection = isJsonObject(value) || Array.isArray(value);
 
   return (
-    <div className={`json-editor-node ${isCollection ? "collection" : "primitive"}`}>
-      <div className="json-editor-row">
-        {isCollection ? (
-          <button
-            aria-label={`${expanded ? "Collapse" : "Expand"} ${label}`}
-            className="json-expand"
-            type="button"
-            onClick={() => setExpanded((current) => !current)}
+    <article className={`rule-field-card ${collection ? "collection" : ""} ${root ? "root" : ""}`}>
+      <div className="rule-field-head">
+        {onRename ? <RuleKeyInput value={label} onCommit={onRename} disabled={disabled} /> : <strong>{label}</strong>}
+        <div className="rule-field-actions">
+          <select
+            aria-label={`${label} value type`}
+            className="rule-kind-select"
+            disabled={disabled}
+            value={kind}
+            onChange={(event) => onChange(defaultValueForKind(event.target.value as JsonKind))}
           >
-            {expanded ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
-          </button>
-        ) : <span className="json-expand-spacer" />}
-        <span className="json-node-label">{label}</span>
-        <select
-          aria-label={`${label} value type`}
-          className="json-kind-select"
-          value={kind}
-          onChange={(event) => onChange(defaultValueForKind(event.target.value as JsonKind))}
-        >
-          <option value="object">Object</option>
-          <option value="array">Array</option>
-          <option value="string">Text</option>
-          <option value="number">Number</option>
-          <option value="boolean">True / false</option>
-          <option value="null">Empty</option>
-        </select>
-        {onDelete ? (
-          <button aria-label={`Delete ${label}`} className="json-delete" type="button" onClick={onDelete}>
-            <Trash2 size={15} aria-hidden="true" />
-          </button>
-        ) : null}
+            <option value="object">Object</option>
+            <option value="array">Array</option>
+            <option value="string">Text</option>
+            <option value="number">Number</option>
+            <option value="boolean">True / false</option>
+            <option value="null">Empty</option>
+          </select>
+          {onDelete ? (
+            <button aria-label={`Delete ${label}`} className="rule-delete" disabled={disabled} type="button" onClick={onDelete}>
+              <Trash2 size={16} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
       </div>
-
       {typeof value === "string" ? (
-        <textarea
-          aria-label={`${label} text`}
-          className="json-text-input"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-        />
+        <textarea aria-label={`${label} text`} className="rule-text-input" disabled={disabled} value={value} onChange={(event) => onChange(event.target.value)} />
       ) : null}
       {typeof value === "number" ? (
         <input
           aria-label={`${label} number`}
-          className="json-number-input"
+          className="rule-number-input"
+          disabled={disabled}
           inputMode="decimal"
           type="number"
           value={String(value)}
@@ -93,93 +140,81 @@ function JsonEditorNode({
         />
       ) : null}
       {typeof value === "boolean" ? (
-        <label className="json-boolean-input">
-          <input checked={value} type="checkbox" onChange={(event) => onChange(event.target.checked)} />
-          {value ? "True" : "False"}
-        </label>
+        <label className="rule-boolean-input"><input checked={value} disabled={disabled} type="checkbox" onChange={(event) => onChange(event.target.checked)} /> {value ? "True" : "False"}</label>
       ) : null}
-      {value === null ? <span className="json-null-value">No value</span> : null}
-
-      {isCollection && expanded ? (
-        <div className="json-editor-children">
-          {isJsonObject(value) ? <ObjectEditor value={value} onChange={onChange} /> : null}
-          {Array.isArray(value) ? <ArrayEditor value={value} onChange={onChange} /> : null}
-        </div>
-      ) : null}
-    </div>
+      {value === null ? <p className="rule-null-value">No value</p> : null}
+      {isJsonObject(value) ? <ObjectFields value={value} onChange={onChange} disabled={disabled} /> : null}
+      {Array.isArray(value) ? <ArrayItems value={value} onChange={onChange} disabled={disabled} /> : null}
+    </article>
   );
 }
 
-function ObjectEditor({
-  value,
-  onChange
-}: {
-  value: { [key: string]: BlueprintJsonValue };
-  onChange: (value: BlueprintJsonValue) => void;
-}) {
-  const entries = Object.entries(value);
+function RuleKeyInput({ value, onCommit, disabled }: { value: string; onCommit: (value: string) => void; disabled: boolean }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  return (
+    <input
+      aria-label="Field name"
+      className="rule-key-input"
+      disabled={disabled}
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => {
+        const trimmed = draft.trim();
+        if (trimmed) onCommit(trimmed);
+        else setDraft(value);
+      }}
+    />
+  );
+}
 
-  function updateEntry(key: string, nextValue: BlueprintJsonValue) {
+function ObjectFields({ value, onChange, disabled }: { value: Record<string, BlueprintJsonValue>; onChange: (value: BlueprintJsonValue) => void; disabled: boolean }) {
+  const entries = Object.entries(value);
+  function updateField(key: string, nextValue: BlueprintJsonValue) {
     onChange({ ...value, [key]: nextValue });
   }
-
-  function deleteEntry(key: string) {
+  function deleteField(key: string) {
     const nextValue = { ...value };
     delete nextValue[key];
     onChange(nextValue);
   }
-
-  function renameEntry(key: string, nextKey: string) {
-    const trimmedKey = nextKey.trim();
-    if (!trimmedKey || trimmedKey === key || Object.hasOwn(value, trimmedKey)) return;
-    const nextValue = Object.fromEntries(entries.map(([entryKey, entryValue]) => [entryKey === key ? trimmedKey : entryKey, entryValue]));
-    onChange(nextValue);
+  function renameField(key: string, nextKey: string) {
+    if (nextKey === key || Object.hasOwn(value, nextKey)) return;
+    onChange(Object.fromEntries(entries.map(([entryKey, entryValue]) => [entryKey === key ? nextKey : entryKey, entryValue])));
   }
-
-  function addEntry() {
-    onChange({ ...value, [nextObjectKey(value)]: "" });
-  }
-
   return (
-    <>
-      {entries.map(([key, entryValue]) => (
-        <div className="json-object-entry" key={key}>
-          <input
-            aria-label="Object key"
-            className="json-key-input"
-            value={key}
-            onChange={(event) => renameEntry(key, event.target.value)}
-          />
-          <JsonEditorNode label={key} value={entryValue} onChange={(nextValue) => updateEntry(key, nextValue)} onDelete={() => deleteEntry(key)} />
-        </div>
+    <div className="rule-field-list">
+      {entries.map(([key, fieldValue]) => (
+        <RuleValueEditor
+          key={key}
+          label={key}
+          value={fieldValue}
+          onChange={(nextValue) => updateField(key, nextValue)}
+          onDelete={() => deleteField(key)}
+          onRename={(nextKey) => renameField(key, nextKey)}
+          disabled={disabled}
+        />
       ))}
-      <button className="json-add" type="button" onClick={addEntry}><Plus size={15} aria-hidden="true" /> Add field</button>
-    </>
+      <button className="rule-add" disabled={disabled} type="button" onClick={() => onChange({ ...value, [nextObjectKey(value)]: "" })}><Plus size={16} aria-hidden="true" /> Add field</button>
+    </div>
   );
 }
 
-function ArrayEditor({ value, onChange }: { value: BlueprintJsonValue[]; onChange: (value: BlueprintJsonValue) => void }) {
-  function updateEntry(index: number, nextValue: BlueprintJsonValue) {
-    onChange(value.map((entry, entryIndex) => (entryIndex === index ? nextValue : entry)));
-  }
-
-  function deleteEntry(index: number) {
-    onChange(value.filter((_entry, entryIndex) => entryIndex !== index));
-  }
-
+function ArrayItems({ value, onChange, disabled }: { value: BlueprintJsonValue[]; onChange: (value: BlueprintJsonValue) => void; disabled: boolean }) {
   return (
-    <>
-      {value.map((entry, index) => (
-        <JsonEditorNode
+    <div className="rule-field-list">
+      {value.map((item, index) => (
+        <RuleValueEditor
           key={index}
           label={`Item ${index + 1}`}
-          value={entry}
-          onChange={(nextValue) => updateEntry(index, nextValue)}
-          onDelete={() => deleteEntry(index)}
+          value={item}
+          onChange={(nextValue) => onChange(value.map((entry, entryIndex) => entryIndex === index ? nextValue : entry))}
+          onDelete={() => onChange(value.filter((_entry, entryIndex) => entryIndex !== index))}
+          disabled={disabled}
         />
       ))}
-      <button className="json-add" type="button" onClick={() => onChange([...value, ""])}><Plus size={15} aria-hidden="true" /> Add item</button>
-    </>
+      <button className="rule-add" disabled={disabled} type="button" onClick={() => onChange([...value, ""])}><Plus size={16} aria-hidden="true" /> Add item</button>
+    </div>
   );
 }
 
@@ -189,8 +224,7 @@ function jsonKind(value: BlueprintJsonValue): JsonKind {
   if (typeof value === "object") return "object";
   if (typeof value === "boolean") return "boolean";
   if (typeof value === "number") return "number";
-  if (typeof value === "string") return "string";
-  throw new Error("Blueprint JSON contains an unsupported value.");
+  return "string";
 }
 
 function defaultValueForKind(kind: JsonKind): BlueprintJsonValue {
@@ -204,7 +238,7 @@ function defaultValueForKind(kind: JsonKind): BlueprintJsonValue {
   }
 }
 
-function nextObjectKey(value: { [key: string]: BlueprintJsonValue }) {
+function nextObjectKey(value: Record<string, BlueprintJsonValue>) {
   let number = 1;
   while (Object.hasOwn(value, `field_${number}`)) number += 1;
   return `field_${number}`;
@@ -220,6 +254,6 @@ export function isBlueprintJsonValue(value: unknown): value is BlueprintJsonValu
   return Object.values(value).every((entry) => isBlueprintJsonValue(entry));
 }
 
-function isJsonObject(value: BlueprintJsonValue): value is { [key: string]: BlueprintJsonValue } {
+function isJsonObject(value: BlueprintJsonValue): value is Record<string, BlueprintJsonValue> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

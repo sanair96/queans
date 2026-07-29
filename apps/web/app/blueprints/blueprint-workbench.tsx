@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { Check, ChevronLeft, FileText, Languages, PanelRightOpen, RotateCcw, Save } from "lucide-react";
+import { Check, ChevronLeft, FileText, Languages, PanelRightOpen, RotateCcw } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { assertOk } from "../api-errors";
 import { apiBaseUrl } from "../api-client";
-import { BlueprintJsonEditor, isBlueprintJsonValue, type BlueprintJsonValue } from "./blueprint-json-editor";
+import { isBlueprintJsonValue, type BlueprintJsonValue } from "./blueprint-json-editor";
+import { BlueprintRuleEditorModal } from "./blueprint-rule-editor-modal";
 
 interface LanguageEvidence {
   tag: string;
@@ -73,6 +74,7 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
   );
   const [savingRules, setSavingRules] = useState(false);
   const [rulesNotice, setRulesNotice] = useState("");
+  const [ruleEditorOpen, setRuleEditorOpen] = useState(false);
   const selectedPage = useMemo(
     () => initialPages.find((page) => page.pageNumber === selectedPageNumber) ?? initialPages[0],
     [initialPages, selectedPageNumber]
@@ -130,7 +132,7 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
 
   async function saveRules() {
     if (editedRules === undefined || !rulesDirty) {
-      return;
+      return false;
     }
 
     setSavingRules(true);
@@ -143,7 +145,7 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
       });
       if (response.status === 409) {
         setRulesNotice("This Blueprint changed elsewhere. Reload the page before saving your edits.");
-        return;
+        return false;
       }
       await assertOk(response, "Blueprint save");
       const updated = (await response.json()) as BlueprintDocument;
@@ -152,8 +154,10 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
       setEditedRules(updatedRules);
       setSavedRules(updatedRules);
       setRulesNotice("Saved.");
+      return true;
     } catch (error) {
       setRulesNotice(error instanceof Error ? error.message : "Blueprint rules could not be saved.");
+      return false;
     } finally {
       setSavingRules(false);
     }
@@ -247,10 +251,6 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
         <article className="panel blueprint-rules-preview">
           <div className="blueprint-pane-head">
             <div className="blueprint-pane-title"><PanelRightOpen size={17} aria-hidden="true" /><h2>Rule editor</h2></div>
-            <button className="btn compact" disabled={savingRules || !rulesDirty || editedRules === undefined || blueprint.status !== "READY"} type="button" onClick={() => void saveRules()}>
-              <Save size={15} aria-hidden="true" />
-              {savingRules ? "Saving" : "Save changes"}
-            </button>
           </div>
           {editedRules === undefined ? (
             <div className="blueprint-preview-empty">
@@ -259,13 +259,36 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
             </div>
           ) : (
             <>
-              <p className="editor-caption">{rulesDirty ? "Unsaved changes" : "All changes saved"}</p>
-              <BlueprintJsonEditor value={editedRules} onChange={setEditedRules} />
+              <div className="blueprint-rule-summary">
+                <strong>{rulesDirty ? "Unsaved rule edits" : "Extracted rule draft"}</strong>
+                <p className="muted">Open the focused editor to read and modify the extracted values without the nested tree layout.</p>
+                <button className="btn compact" type="button" onClick={() => setRuleEditorOpen(true)}>Open rule editor</button>
+              </div>
               {rulesNotice ? <div className="status compact">{rulesNotice}</div> : null}
             </>
           )}
         </article>
       </section>
+      {editedRules !== undefined ? (
+        <BlueprintRuleEditorModal
+          open={ruleEditorOpen}
+          value={editedRules}
+          dirty={rulesDirty}
+          saving={savingRules}
+          canSave={blueprint.status === "READY"}
+          notice={rulesNotice}
+          onChange={(value) => {
+            setEditedRules(value);
+            setRulesNotice("");
+          }}
+          onSave={saveRules}
+          onClose={() => setRuleEditorOpen(false)}
+          onDiscard={() => {
+            setEditedRules(savedRules);
+            setRulesNotice("");
+          }}
+        />
+      ) : null}
     </>
   );
 }
