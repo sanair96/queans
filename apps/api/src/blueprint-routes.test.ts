@@ -98,6 +98,7 @@ const apiConfig: ApiConfig = {
   TEMPORAL_ADDRESS: "localhost:7233",
   TEMPORAL_NAMESPACE: "default",
   TEMPORAL_TASK_QUEUE_PAPER_INGESTION: "paper-ingestion",
+  TEMPORAL_TASK_QUEUE_BLUEPRINT_INGESTION: "blueprint-ingestion",
   TEMPORAL_TASK_QUEUE_OCR: "paper-ocr",
   TEMPORAL_TASK_QUEUE_LLM: "paper-llm-extraction"
 };
@@ -106,6 +107,7 @@ const { buildServer } = await import("./server.js");
 const {
   blueprintDetailPayload,
   blueprintIngestionInputPayload,
+  blueprintRetryMode,
   blueprintUploadCompletionConflict,
   blueprintUploadCompletionPayload
 } = await import("./blueprint-routes.js");
@@ -218,7 +220,7 @@ describe("Blueprint API routes", () => {
       expect(workflowCreate.data.inputPayload).toEqual(
         expect.objectContaining({ blueprintDocumentId: "blueprint-1" })
       );
-      expect(Object.keys(workflowCreate.data.inputPayload as object).sort()).toEqual(["blueprintDocumentId", "workflowRunId"]);
+      expect(Object.keys(workflowCreate.data.inputPayload as object).sort()).toEqual(["blueprintDocumentId", "mode", "workflowRunId"]);
     } finally {
       await app.close();
     }
@@ -556,15 +558,22 @@ describe("Blueprint API routes", () => {
 
 describe("Blueprint API helpers", () => {
   it("keeps workflow payloads identifier-only and completed responses stable", () => {
-    expect(blueprintIngestionInputPayload({ workflowRunId: "run-1", blueprintDocumentId: "blueprint-1" })).toEqual({
+    expect(blueprintIngestionInputPayload({ workflowRunId: "run-1", blueprintDocumentId: "blueprint-1", mode: "FULL" })).toEqual({
       workflowRunId: "run-1",
-      blueprintDocumentId: "blueprint-1"
+      blueprintDocumentId: "blueprint-1",
+      mode: "FULL"
     });
     expect(blueprintUploadCompletionPayload({ id: "blueprint-1", workflowRuns: [{ id: "run-1", status: "PENDING" }] })).toEqual({
       blueprintDocumentId: "blueprint-1",
       workflowRunId: "run-1",
       status: "QUEUED"
     });
+  });
+
+  it("resumes only when all OCR pages were persisted", () => {
+    expect(blueprintRetryMode({ pageCount: 2, ocrPageCount: 2 })).toBe("RESUME_FROM_OCR");
+    expect(blueprintRetryMode({ pageCount: 2, ocrPageCount: 1 })).toBe("FULL");
+    expect(blueprintRetryMode({ pageCount: null, ocrPageCount: 1 })).toBe("FULL");
   });
 
   it("rejects a completed object whose MIME type differs from the initialized upload", () => {

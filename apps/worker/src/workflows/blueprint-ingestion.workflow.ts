@@ -26,7 +26,9 @@ const activities = proxyActivities<BlueprintIngestionActivities>({
 export async function BlueprintIngestionWorkflow(input: BlueprintIngestionWorkflowInput) {
   try {
     await activities.beginBlueprintWorkflow(input);
-    await activities.ocrBlueprintDocument(input);
+    if (input.mode === "FULL") {
+      await activities.ocrBlueprintDocument(input);
+    }
     await activities.analyzeBlueprintStructure(input);
     await activities.extractBlueprintRules(input);
     await activities.persistBlueprintDraft(input);

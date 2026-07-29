@@ -63,4 +63,8 @@ export function blueprintIngestionWorkflowId(workflowRunId: string) {
 export interface BlueprintIngestionWorkflowInput {
   workflowRunId: string;
   blueprintDocumentId: string;
+  mode: BlueprintIngestionMode;
 }
+
+export const blueprintIngestionModes = ["FULL", "RESUME_FROM_OCR"] as const;
+export type BlueprintIngestionMode = (typeof blueprintIngestionModes)[number];

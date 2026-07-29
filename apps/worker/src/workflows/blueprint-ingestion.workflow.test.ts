@@ -18,7 +18,8 @@ const { BlueprintIngestionWorkflow } = await import("./blueprint-ingestion.workf
 
 const input = {
   workflowRunId: "run-1",
-  blueprintDocumentId: "blueprint-1"
+  blueprintDocumentId: "blueprint-1",
+  mode: "FULL" as const
 };
 
 describe("BlueprintIngestionWorkflow", () => {
@@ -58,5 +59,18 @@ describe("BlueprintIngestionWorkflow", () => {
     expect(activityMocks.completeBlueprintWorkflow).not.toHaveBeenCalled();
     expect(activityMocks.failBlueprintWorkflow).toHaveBeenCalledOnce();
     expect(activityMocks.failBlueprintWorkflow).toHaveBeenCalledWith(input);
+  });
+
+  it("resumes extraction from stored OCR without invoking OCR again", async () => {
+    const resumeInput = { ...input, mode: "RESUME_FROM_OCR" as const };
+
+    await BlueprintIngestionWorkflow(resumeInput);
+
+    expect(activityMocks.beginBlueprintWorkflow).toHaveBeenCalledWith(resumeInput);
+    expect(activityMocks.ocrBlueprintDocument).not.toHaveBeenCalled();
+    expect(activityMocks.analyzeBlueprintStructure).toHaveBeenCalledWith(resumeInput);
+    expect(activityMocks.extractBlueprintRules).toHaveBeenCalledWith(resumeInput);
+    expect(activityMocks.persistBlueprintDraft).toHaveBeenCalledWith(resumeInput);
+    expect(activityMocks.completeBlueprintWorkflow).toHaveBeenCalledWith(resumeInput);
   });
 });

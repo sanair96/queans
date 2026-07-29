@@ -15,6 +15,8 @@ import { Prisma, prisma } from "@queans/db";
 import { loadR2ConfigFromEnv, R2ObjectStore, type StoredObjectHead } from "@queans/providers";
 
 import { toInputJson } from "./json.js";
+import type { ApiConfig } from "./config.js";
+import { dispatchPendingWorkflowStarts } from "./outbox.js";
 
 interface BlueprintIdParams {
   id: string;
@@ -71,7 +73,7 @@ const blueprintListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(25)
 });
 
-export function registerBlueprintRoutes(app: FastifyInstance) {
+export function registerBlueprintRoutes(app: FastifyInstance, config: ApiConfig) {
   app.post("/api/blueprints/uploads/init", async (request, reply) => {
     const input = blueprintUploadInitSchema.parse(request.body);
     const r2 = getR2ObjectStoreOrReply(reply);
@@ -173,7 +175,8 @@ export function registerBlueprintRoutes(app: FastifyInstance) {
             inputPayload: toInputJson(
               blueprintIngestionInputPayload({
                 workflowRunId,
-                blueprintDocumentId: blueprintDocument.id
+                blueprintDocumentId: blueprintDocument.id,
+                mode: "FULL"
               })
             )
           }
@@ -187,6 +190,10 @@ export function registerBlueprintRoutes(app: FastifyInstance) {
           }
         });
         return { blueprintDocument, workflowRun };
+      });
+
+      Promise.resolve(dispatchPendingWorkflowStarts(config)).catch((error: unknown) => {
+        request.log.error({ error }, "Blueprint workflow dispatch failed after upload completion");
       });
 
       return reply.code(202).send({
@@ -369,6 +376,78 @@ export function registerBlueprintRoutes(app: FastifyInstance) {
     return blueprintDetailPayload(updatedBlueprintDocument);
   });
 
+  app.post<{ Params: BlueprintIdParams }>("/api/blueprints/:id/retry", async (request, reply) => {
+    const result = await prisma.$transaction(async (tx) => {
+      const blueprintDocument = await tx.blueprintDocument.findUnique({
+        where: { id: request.params.id },
+        include: {
+          _count: { select: { ocrPages: true } },
+          workflowRuns: { orderBy: { createdAt: "desc" }, take: 1 }
+        }
+      });
+      if (!blueprintDocument) {
+        return { error: "BLUEPRINT_NOT_FOUND" as const };
+      }
+      if (blueprintDocument.status !== "NEEDS_REVIEW" && blueprintDocument.status !== "FAILED") {
+        return { error: "BLUEPRINT_NOT_RETRYABLE" as const };
+      }
+
+      const activeWorkflow = await tx.workflowRun.findFirst({
+        where: {
+          blueprintDocumentId: blueprintDocument.id,
+          workflowType: "BLUEPRINT_INGESTION",
+          status: { in: ["PENDING", "RUNNING"] }
+        },
+        select: { id: true }
+      });
+      if (activeWorkflow) {
+        return { error: "BLUEPRINT_INGESTION_ALREADY_ACTIVE" as const };
+      }
+
+      const languageAnalysis = blueprintLanguageAnalysisSchema.safeParse(blueprintDocument.languageDetectionMetadata);
+      if (
+        blueprintDocument.status === "NEEDS_REVIEW" &&
+        (!languageAnalysis.success || !languageAnalysis.data.primaryLanguage.tag || languageAnalysis.data.primaryLanguage.requiresConfirmation)
+      ) {
+        return { error: "BLUEPRINT_PRIMARY_LANGUAGE_CONFIRMATION_REQUIRED" as const };
+      }
+
+      const workflowRunId = randomUUID();
+      const mode = blueprintRetryMode({ pageCount: blueprintDocument.pageCount, ocrPageCount: blueprintDocument._count.ocrPages });
+      const previousWorkflowRunId = blueprintDocument.workflowRuns[0]?.id ?? null;
+      const workflowRun = await tx.workflowRun.create({
+        data: {
+          id: workflowRunId,
+          workflowType: "BLUEPRINT_INGESTION",
+          entityId: blueprintDocument.id,
+          blueprintDocumentId: blueprintDocument.id,
+          retryOfWorkflowRunId: previousWorkflowRunId,
+          status: "PENDING",
+          currentStep: "queued",
+          inputPayload: toInputJson(blueprintIngestionInputPayload({ workflowRunId, blueprintDocumentId: blueprintDocument.id, mode }))
+        }
+      });
+      await tx.workflowStartOutbox.create({ data: { workflowRunId: workflowRun.id } });
+      await tx.workflowEvent.create({
+        data: {
+          workflowRunId: workflowRun.id,
+          eventType: "BLUEPRINT_RETRY_QUEUED",
+          eventPayload: { blueprintDocumentId: blueprintDocument.id, mode, retryOfWorkflowRunId: previousWorkflowRunId }
+        }
+      });
+      return { workflowRunId: workflowRun.id, status: "QUEUED" as const, mode };
+    });
+
+    if ("error" in result) {
+      const statusCode = result.error === "BLUEPRINT_NOT_FOUND" ? 404 : 409;
+      return reply.code(statusCode).send(result);
+    }
+    Promise.resolve(dispatchPendingWorkflowStarts(config)).catch((error: unknown) => {
+      request.log.error({ error }, "Blueprint workflow dispatch failed after retry");
+    });
+    return reply.code(202).send(result);
+  });
+
   app.put<{ Params: BlueprintIdParams }>("/api/blueprints/:id/rules", async (request, reply) => {
     const input = blueprintDraftSaveSchema.parse(request.body);
     const update = await prisma.blueprintDocument.updateMany({
@@ -419,11 +498,20 @@ const blueprintListSelect = {
   updatedAt: true
 } satisfies Prisma.BlueprintDocumentSelect;
 
-export function blueprintIngestionInputPayload(input: { workflowRunId: string; blueprintDocumentId: string }) {
+export function blueprintIngestionInputPayload(input: {
+  workflowRunId: string;
+  blueprintDocumentId: string;
+  mode: "FULL" | "RESUME_FROM_OCR";
+}) {
   return {
     workflowRunId: input.workflowRunId,
-    blueprintDocumentId: input.blueprintDocumentId
+    blueprintDocumentId: input.blueprintDocumentId,
+    mode: input.mode
   };
+}
+
+export function blueprintRetryMode(input: { pageCount: number | null; ocrPageCount: number }) {
+  return input.pageCount !== null && input.pageCount > 0 && input.ocrPageCount >= input.pageCount ? "RESUME_FROM_OCR" : "FULL" as const;
 }
 
 export function blueprintUploadCompletionPayload(blueprintDocument: {

@@ -34,7 +34,7 @@ export const INTERNAL_API_TOKEN_HEADER = "x-queans-internal-token";
 export function registerRoutes(app: FastifyInstance, config: ApiConfig) {
   app.get("/health", () => ({ ok: true }));
 
-  registerBlueprintRoutes(app);
+  registerBlueprintRoutes(app, config);
 
   app.get("/ready", async (_request, reply) => {
     const result = await checkReadiness(config);

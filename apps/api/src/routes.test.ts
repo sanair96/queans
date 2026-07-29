@@ -29,6 +29,7 @@ import {
 
 const apiConfig = {
   TEMPORAL_TASK_QUEUE_PAPER_INGESTION: "paper-ingestion",
+  TEMPORAL_TASK_QUEUE_BLUEPRINT_INGESTION: "blueprint-ingestion",
   TEMPORAL_TASK_QUEUE_OCR: "paper-ocr",
   TEMPORAL_TASK_QUEUE_LLM: "paper-llm-extraction",
   MISTRAL_EXECUTION_MODE: "sync"

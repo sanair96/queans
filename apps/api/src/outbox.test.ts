@@ -14,11 +14,11 @@ import {
 } from "./outbox.js";
 
 describe("workflow start outbox helpers", () => {
-  it("keeps Blueprint workflow starts pending until their dedicated dispatcher is added", () => {
+  it("dispatches paper and Blueprint workflow starts", () => {
     const staleBefore = new Date("2026-07-02T10:00:00.000Z");
 
     expect(dispatchableWorkflowStartOutboxWhere(3, staleBefore)).toMatchObject({
-      workflowRun: { workflowType: "PAPER_INGESTION" }
+      workflowRun: { workflowType: { in: ["PAPER_INGESTION", "BLUEPRINT_INGESTION"] } }
     });
   });
 

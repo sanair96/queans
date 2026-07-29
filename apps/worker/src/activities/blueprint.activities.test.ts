@@ -59,7 +59,8 @@ const { BlueprintExtractionResponseError } = await import("@queans/providers");
 
 const input = {
   workflowRunId: "run-1",
-  blueprintDocumentId: "blueprint-1"
+  blueprintDocumentId: "blueprint-1",
+  mode: "FULL" as const
 };
 
 const persistedLanguageAnalysis = {

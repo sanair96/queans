@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Check, ChevronLeft, FileText, Languages, PanelRightOpen, Save } from "lucide-react";
+import { Check, ChevronLeft, FileText, Languages, PanelRightOpen, RotateCcw, Save } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { assertOk } from "../api-errors";
@@ -101,13 +101,32 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
       const updated = (await response.json()) as BlueprintDocument;
       setBlueprint(updated);
       setSelectedLanguage(updated.primaryLanguage ?? selectedLanguage);
-      setNotice("Primary language confirmed. Rule extraction can be continued in the next workflow phase.");
+      setNotice("Primary language confirmed. Continue extraction when you are ready.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Primary language could not be confirmed.");
     } finally {
       setBusy(false);
     }
   }
+
+  async function retryExtraction() {
+    setBusy(true);
+    setNotice("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/blueprints/${blueprint.id}/retry`, { method: "POST" });
+      await assertOk(response, "Blueprint extraction retry");
+      const queued = (await response.json()) as { status: string; mode: "FULL" | "RESUME_FROM_OCR" };
+      setBlueprint((current) => ({ ...current, status: queued.status }));
+      setNotice(queued.mode === "RESUME_FROM_OCR" ? "Extraction queued. Existing OCR pages will be reused." : "Ingestion queued. OCR will run again before extraction.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Blueprint extraction could not be queued.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const canContinueExtraction = blueprint.status === "NEEDS_REVIEW" && !requiresLanguageDecision;
+  const canRetryExtraction = blueprint.status === "FAILED";
 
   async function saveRules() {
     if (editedRules === undefined || !rulesDirty) {
@@ -191,6 +210,12 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
         <section className="panel language-confirmed">
           <Check size={20} aria-hidden="true" />
           <span>Rules language: <strong>{blueprint.primaryLanguage ? languageName(blueprint.primaryLanguage) : "Not selected"}</strong></span>
+          {canContinueExtraction || canRetryExtraction ? (
+            <button className="btn compact" disabled={busy} type="button" onClick={() => void retryExtraction()}>
+              <RotateCcw size={15} aria-hidden="true" />
+              {busy ? "Queuing" : canContinueExtraction ? "Continue extraction" : "Retry extraction"}
+            </button>
+          ) : null}
           {notice ? <span className="muted">{notice}</span> : null}
         </section>
       )}

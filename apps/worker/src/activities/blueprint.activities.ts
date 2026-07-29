@@ -265,7 +265,7 @@ export async function beginBlueprintWorkflow(input: BlueprintIngestionWorkflowIn
     },
     data: {
       status: "RUNNING",
-      currentStep: "ocr_document"
+      currentStep: input.mode === "FULL" ? "ocr_document" : "analyze_structure"
     }
   });
   if (claimed.count === 0) {
@@ -276,15 +276,24 @@ export async function beginBlueprintWorkflow(input: BlueprintIngestionWorkflowIn
     prisma.blueprintDocument.updateMany({
       where: {
         id: input.blueprintDocumentId,
-        status: { in: ["QUEUED", "PROCESSING"] }
+        status: { in: ["QUEUED", "PROCESSING", "NEEDS_REVIEW", "FAILED"] }
       },
-      data: { status: "PROCESSING" }
+      data: {
+        status: "PROCESSING",
+        ...(input.mode === "RESUME_FROM_OCR"
+          ? {
+            rawExtractionJson: Prisma.DbNull,
+            extractionMetadataJson: Prisma.DbNull,
+            extractionError: null
+          }
+          : {})
+      }
     }),
     prisma.workflowEvent.create({
       data: {
         workflowRunId: input.workflowRunId,
         eventType: "BLUEPRINT_PROCESSING_STARTED",
-        eventPayload: { blueprintDocumentId: input.blueprintDocumentId }
+        eventPayload: { blueprintDocumentId: input.blueprintDocumentId, mode: input.mode }
       }
     })
   ]);
