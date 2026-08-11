@@ -54,7 +54,8 @@ export function analyzeBlueprintOcrPages(input: {
     detectedLanguages,
     primaryLanguage: input.primaryLanguage,
     primaryLanguageSource: input.primaryLanguageSource,
-    inferredPrimaryLanguage: input.providerLanguageAnalysis?.primaryLanguage
+    inferredPrimaryLanguage: input.providerLanguageAnalysis.primaryLanguage,
+    documentAnalysis: input.providerLanguageAnalysis.documentAnalysis
   });
   const mixedLanguagePageNumbers = input.providerLanguageAnalysis.mixedLanguagePageNumbers;
   const duplicatePairs = likelyDuplicateLanguagePairs(pages);
@@ -74,6 +75,7 @@ export function analyzeBlueprintOcrPages(input: {
           rawResponse: input.providerLanguageAnalysis.rawJson
         },
         likelyDuplicateLanguagePairs: duplicatePairs,
+        documentAnalysis: input.providerLanguageAnalysis.documentAnalysis,
         structureAnalysis: pages.map((page) => ({ pageNumber: page.pageNumber, ...page.structure }))
       }
     }),
@@ -225,6 +227,7 @@ function selectPrimaryLanguage(input: {
   primaryLanguage: string | null;
   primaryLanguageSource: BlueprintPrimaryLanguageSource;
   inferredPrimaryLanguage?: BlueprintLanguageAnalysisResult["primaryLanguage"] | undefined;
+  documentAnalysis: BlueprintLanguageAnalysisResult["documentAnalysis"];
 }) {
   if (input.primaryLanguage) {
     const tag = blueprintLanguageTagSchema.parse(input.primaryLanguage);
@@ -256,15 +259,25 @@ function selectPrimaryLanguage(input: {
   }
 
   const uncertainTag = candidate.tag === "und" || candidate.tag.startsWith("und-");
+  const titleOrHeaderAgrees = [input.documentAnalysis.titleLanguageTag, input.documentAnalysis.headerLanguageTag]
+    .filter((tag): tag is string => Boolean(tag))
+    .some((tag) => sameLanguage(tag, candidate.tag));
+  const confidentlyIdentifiedByDocument = input.documentAnalysis.isMarkingScheme && titleOrHeaderAgrees &&
+    (input.inferredPrimaryLanguage?.confidence ?? candidate.confidence ?? 0) >= 0.85;
   return {
     tag: candidate.tag,
     source: "INFERRED",
     confidence: input.inferredPrimaryLanguage?.confidence ?? candidate.confidence ?? 0,
-    requiresConfirmation:
+    requiresConfirmation: !confidentlyIdentifiedByDocument && (
       uncertainTag ||
       input.detectedLanguages.length > 1 ||
       (input.inferredPrimaryLanguage?.confidence ?? candidate.confidence ?? 0) < 0.85
+    )
   } as const;
+}
+
+function sameLanguage(left: string, right: string) {
+  return left.toLowerCase().split("-")[0] === right.toLowerCase().split("-")[0];
 }
 
 function likelyDuplicateLanguagePairs(pages: BlueprintPageAnalysis[]) {

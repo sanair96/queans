@@ -3,7 +3,8 @@
 import { Save, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { BlueprintJsonEditor, type BlueprintJsonValue } from "./blueprint-json-editor";
+import type { BlueprintJsonValue } from "./blueprint-json-editor";
+import { MarkingSchemeReviewForm } from "./marking-scheme-review-form";
 
 interface BlueprintRuleEditorModalProps {
   open: boolean;
@@ -78,21 +79,21 @@ export function BlueprintRuleEditorModal({
       <div className="rule-editor-modal-shell">
         <header className="rule-editor-modal-head">
           <div>
-            <p className="eyebrow">Blueprint rule draft</p>
-            <h2 id="rule-editor-title">Review extracted rules</h2>
-            <p className="muted" id="rule-editor-description">Edit one section at a time. Long source text stays full width so it can be read before you change it.</p>
+            <p className="eyebrow">Review before saving</p>
+            <h2 id="rule-editor-title">Review extracted marking scheme</h2>
+            <p className="muted" id="rule-editor-description">Check the extracted document details, evaluator guidance, assessment sections, and question marking before approving this Blueprint.</p>
           </div>
           <button aria-label="Close rule editor" className="rule-modal-close" disabled={saving} type="button" onClick={requestClose}><X size={20} aria-hidden="true" /></button>
         </header>
         <div className="rule-editor-modal-body">
-          <BlueprintJsonEditor value={value} onChange={onChange} disabled={!canSave || saving} />
+          <MarkingSchemeReviewForm value={value} onChange={onChange} disabled={!canSave || saving} />
         </div>
         <footer className="rule-editor-modal-foot">
-          <p className={notice ? "rule-editor-notice" : "editor-caption"}>{notice || (dirty ? "Unsaved changes" : "All changes saved")}</p>
+          <p className={notice ? "rule-editor-notice" : "editor-caption"}>{notice || (dirty ? "Changes ready for approval" : "Review the extracted values, then approve this Blueprint")}</p>
           <div className="button-row">
             <button className="btn secondary" disabled={saving} type="button" onClick={requestClose}>Close</button>
-            <button className="btn" disabled={!canSave || !dirty || saving} type="button" onClick={() => void save()}>
-              <Save size={16} aria-hidden="true" /> {saving ? "Saving" : "Save changes"}
+            <button className="btn" disabled={!canSave || saving} type="button" onClick={() => void save()}>
+              <Save size={16} aria-hidden="true" /> {saving ? "Saving" : "Approve & save Blueprint"}
             </button>
           </div>
         </footer>

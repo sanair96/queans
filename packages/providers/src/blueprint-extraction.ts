@@ -2,7 +2,12 @@ import { loadMistralConfigFromEnv, MistralBlueprintRuleExtractor } from "./mistr
 import type { BlueprintExtractionResult, BlueprintSourceReferenceResult } from "./types.js";
 
 export interface BlueprintRuleExtractor {
-  extractRules(input: { primaryLanguage: string; pages: Array<{ pageNumber: number; markdown: string }> }): Promise<BlueprintExtractionResult>;
+  extractRules(input: {
+    primaryLanguage: string;
+    pages: Array<{ pageNumber: number; markdown: string }>;
+    evaluatorInstructionPageNumbers?: number[];
+    markingSchemePageNumbers?: number[];
+  }): Promise<BlueprintExtractionResult>;
 }
 
 export interface PersistedBlueprintExtraction {

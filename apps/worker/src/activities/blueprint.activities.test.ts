@@ -26,6 +26,7 @@ vi.mock("@queans/db", () => ({
 vi.mock("@queans/providers", () => ({
   loadMistralConfigFromEnv: mocks.loadMistralConfigFromEnv,
   loadR2ConfigFromEnv: mocks.loadR2ConfigFromEnv,
+  blueprintExtractionProfile: "full_marking_scheme_v1",
   maxR2PresignExpiresSeconds: 900,
   R2ObjectStore: class {
     createPresignedRead = mocks.r2.createPresignedRead;
@@ -67,7 +68,19 @@ const persistedLanguageAnalysis = {
   detectedLanguages: [{ tag: "hi", confidence: 0.99, pageNumbers: [1] }],
   primaryLanguage: { tag: "hi", source: "USER_CONFIRMED", confidence: 1, requiresConfirmation: false },
   mixedLanguagePageNumbers: [],
-  multilingualRelationship: "MONOLINGUAL"
+  multilingualRelationship: "MONOLINGUAL",
+  metadata: {
+    documentAnalysis: {
+      isMarkingScheme: true,
+      confidence: 0.99,
+      titleLanguageTag: "hi",
+      headerLanguageTag: "hi",
+      evidencePageNumbers: [1],
+      evaluatorInstructionPageNumbers: [],
+      markingSchemePageNumbers: [1],
+      paperCode: null
+    }
+  }
 };
 
 function persistedExtractionFromMockResult(result: unknown) {
@@ -139,22 +152,22 @@ describe("Blueprint workflow lifecycle activities", () => {
     const completionCall: unknown = mocks.prisma.blueprintDocument.updateMany.mock.calls[0]?.[0];
     expect(completionCall).toMatchObject({
       where: { id: "blueprint-1", status: "PROCESSING" },
-      data: { status: "READY" }
+      data: { status: "NEEDS_REVIEW" }
     });
   });
 
   it("fails a run and document once without passing OCR or extraction data through Temporal", async () => {
     mocks.prisma.workflowRun.updateMany.mockResolvedValue({ count: 1 });
 
-    await expect(failBlueprintWorkflow(input)).resolves.toEqual({ failed: true });
+    await expect(failBlueprintWorkflow(input, { step: "OCR", message: "provider timed out" })).resolves.toEqual({ failed: true });
     const failureRunCall: unknown = mocks.prisma.workflowRun.updateMany.mock.calls[0]?.[0];
     const failureDocumentCall: unknown = mocks.prisma.blueprintDocument.updateMany.mock.calls[0]?.[0];
     expect(failureRunCall).toMatchObject({
       where: { id: "run-1", blueprintDocumentId: "blueprint-1" },
-      data: { status: "FAILED" }
+      data: { status: "FAILED", errorPayload: { code: "BLUEPRINT_WORKFLOW_FAILED", step: "OCR", message: "provider timed out" } }
     });
     expect(failureDocumentCall).toMatchObject({
-      data: { status: "FAILED", extractionError: "Blueprint ingestion workflow failed." }
+      data: { status: "FAILED", extractionError: "Blueprint ingestion failed during OCR: provider timed out" }
     });
   });
 
@@ -240,6 +253,16 @@ describe("Blueprint workflow lifecycle activities", () => {
         { pageNumber: 1, languages: [{ tag: "en", confidence: 0.99 }] },
         { pageNumber: 2, languages: [{ tag: "hi", confidence: 0.99 }] }
       ],
+      documentAnalysis: {
+        isMarkingScheme: true,
+        confidence: 0.98,
+        titleLanguageTag: "en",
+        headerLanguageTag: "en",
+        evidencePageNumbers: [1],
+        evaluatorInstructionPageNumbers: [1],
+        markingSchemePageNumbers: [2],
+        paperCode: null
+      },
       rawJson: { id: "language-analysis" },
       usage: { promptTokens: 100, completionTokens: 20, totalTokens: 120 }
     });
@@ -290,7 +313,9 @@ describe("Blueprint workflow lifecycle activities", () => {
 
     expect(mocks.blueprintExtraction.extractRules).toHaveBeenCalledWith({
       primaryLanguage: "hi",
-      pages: [{ pageNumber: 1, markdown: "# खंड अ\nसभी प्रश्नों के उत्तर दीजिए" }]
+      pages: [{ pageNumber: 1, markdown: "# खंड अ\nसभी प्रश्नों के उत्तर दीजिए" }],
+      evaluatorInstructionPageNumbers: [],
+      markingSchemePageNumbers: [1]
     });
     const extractionUpdate: unknown = mocks.prisma.blueprintDocument.update.mock.calls[0]?.[0];
     expect(extractionUpdate).toMatchObject({

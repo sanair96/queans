@@ -4,6 +4,7 @@ import {
   BlueprintExtractionResponseError,
   blueprintExtractionJsonSchema,
   blueprintExtractionSystemPrompt,
+  mergeMarkingSchemeRules,
   parseBlueprintExtractionResult
 } from "./blueprint-extraction-contract.js";
 import type {
@@ -335,7 +336,17 @@ const blueprintLanguageAnalysisResponseSchema = z.object({
         })
       ).min(1)
     })
-  )
+  ),
+  document_analysis: z.object({
+    is_marking_scheme: z.boolean(),
+    confidence: z.number().min(0).max(1).nullable(),
+    title_language_tag: z.string().min(1).nullable(),
+    header_language_tag: z.string().min(1).nullable(),
+    evidence_page_numbers: z.array(z.number().int().positive()),
+    evaluator_instruction_page_numbers: z.array(z.number().int().positive()),
+    marking_scheme_page_numbers: z.array(z.number().int().positive()),
+    paper_code: z.string().min(1).nullable()
+  })
 });
 
 const blueprintLanguageAnalysisJsonSchema = {
@@ -347,7 +358,8 @@ const blueprintLanguageAnalysisJsonSchema = {
     "primary_language",
     "mixed_language_page_numbers",
     "multilingual_relationship",
-    "page_languages"
+    "page_languages",
+    "document_analysis"
   ],
   properties: {
     detected_languages: {
@@ -403,6 +415,21 @@ const blueprintLanguageAnalysisJsonSchema = {
           }
         }
       }
+    },
+    document_analysis: {
+      type: "object",
+      additionalProperties: false,
+      required: ["is_marking_scheme", "confidence", "title_language_tag", "header_language_tag", "evidence_page_numbers", "evaluator_instruction_page_numbers", "marking_scheme_page_numbers", "paper_code"],
+      properties: {
+        is_marking_scheme: { type: "boolean" },
+        confidence: { type: ["number", "null"], minimum: 0, maximum: 1 },
+        title_language_tag: { type: ["string", "null"] },
+        header_language_tag: { type: ["string", "null"] },
+        evidence_page_numbers: { type: "array", items: { type: "integer", minimum: 1 } },
+        evaluator_instruction_page_numbers: { type: "array", items: { type: "integer", minimum: 1 } },
+        marking_scheme_page_numbers: { type: "array", items: { type: "integer", minimum: 1 } },
+        paper_code: { type: ["string", "null"] }
+      }
     }
   }
 } as const;
@@ -412,6 +439,8 @@ const defaultMistralRequestTimeoutMs = 120_000;
 const blueprintLanguageAnalysisSystemPrompt = [
   "Analyze OCR pages from one uploaded blueprint document. Do not extract rules or rewrite the document.",
   "Identify every language present using valid BCP 47 tags, including mixed-language pages.",
+  "Classify whether this is a marking scheme from its title, headings, table roles, question/value-point structure, and instructions in any language or script. Do not rely on English words.",
+  "Return document_analysis with title/header language evidence, instruction-page and marking-scheme-page numbers, and a paper code only when visible in the document.",
   "Classify multilingual content as MONOLINGUAL, DUPLICATE_TRANSLATIONS when blocks express the same rules, DISTINCT_REQUIREMENTS when language blocks contain additional requirements, or MIXED_OR_UNCERTAIN when evidence is insufficient.",
   "Page language evidence must preserve every detected language; never treat a bilingual document as separate documents.",
   "Choose a primary language only from detected languages. If uncertain, set tag to null and confidence to null.",
@@ -461,7 +490,7 @@ const solvingSystemPrompt = [
 export class MistralOcrProvider {
   constructor(private readonly config: MistralConfig) {}
 
-  async processDocumentUrl(documentUrl: string): Promise<OcrResult> {
+  async processDocumentUrl(documentUrl: string, pageNumbers?: number[]): Promise<OcrResult> {
     const raw = await callMistral(
       this.config,
       "/v1/ocr",
@@ -473,7 +502,8 @@ export class MistralOcrProvider {
         },
         confidence_scores_granularity: "word",
         table_format: "markdown",
-        include_image_base64: true
+        include_image_base64: true,
+        ...(pageNumbers && pageNumbers.length > 0 ? { pages: pageNumbers.map((pageNumber) => pageNumber - 1) } : {})
       }
     );
     return parseMistralOcrResult(raw);
@@ -533,6 +563,16 @@ export class MistralBlueprintLanguageAnalyzer {
           confidence: language.confidence
         }))
       })),
+      documentAnalysis: {
+        isMarkingScheme: analysis.document_analysis.is_marking_scheme,
+        confidence: analysis.document_analysis.confidence,
+        titleLanguageTag: analysis.document_analysis.title_language_tag,
+        headerLanguageTag: analysis.document_analysis.header_language_tag,
+        evidencePageNumbers: analysis.document_analysis.evidence_page_numbers,
+        evaluatorInstructionPageNumbers: analysis.document_analysis.evaluator_instruction_page_numbers,
+        markingSchemePageNumbers: analysis.document_analysis.marking_scheme_page_numbers,
+        paperCode: analysis.document_analysis.paper_code
+      },
       rawJson: raw,
       usage: {
         promptTokens: completion.usage?.prompt_tokens,
@@ -549,7 +589,30 @@ export class MistralBlueprintRuleExtractor {
   async extractRules(input: {
     primaryLanguage: string;
     pages: Array<{ pageNumber: number; markdown: string }>;
+    evaluatorInstructionPageNumbers?: number[];
+    markingSchemePageNumbers?: number[];
   }): Promise<BlueprintExtractionResult> {
+    const chunks = markingSchemeExtractionChunks(input.pages, input.evaluatorInstructionPageNumbers, input.markingSchemePageNumbers);
+    const extracted = await Promise.all(chunks.map((pages) => this.extractChunk(input.primaryLanguage, pages)));
+    if (extracted.length === 1) return extracted[0]!;
+
+    const first = extracted[0]!;
+    return {
+      ...first,
+      rules: mergeMarkingSchemeRules(extracted.map((result) => result.rules as Parameters<typeof mergeMarkingSchemeRules>[0][number])),
+      confidence: averageConfidence(extracted.map((result) => result.confidence)),
+      sourceReferences: uniqueBy(extracted.flatMap((result) => result.sourceReferences), (reference) => `${reference.pageNumber}:${reference.startOffset ?? ""}:${reference.endOffset ?? ""}:${reference.snippet ?? ""}`),
+      warnings: uniqueBy(extracted.flatMap((result) => result.warnings), (warning) => warning),
+      rawJson: extracted.map((result) => result.rawJson),
+      usage: {
+        promptTokens: sumDefined(extracted.map((result) => result.usage.promptTokens)),
+        completionTokens: sumDefined(extracted.map((result) => result.usage.completionTokens)),
+        totalTokens: sumDefined(extracted.map((result) => result.usage.totalTokens))
+      }
+    };
+  }
+
+  private async extractChunk(primaryLanguage: string, pages: Array<{ pageNumber: number; markdown: string }>): Promise<BlueprintExtractionResult> {
     const raw = await callMistral(this.config, "/v1/chat/completions", {
       model: this.config.extractorModel,
       temperature: 0,
@@ -566,9 +629,9 @@ export class MistralBlueprintRuleExtractor {
         {
           role: "user",
           content: [
-            `Designated primary language: ${input.primaryLanguage}`,
+            `Designated primary language: ${primaryLanguage}`,
             "OCR pages:",
-            ...input.pages.map((page) => `Page ${page.pageNumber}:\n${page.markdown}`)
+            ...pages.map((page) => `Page ${page.pageNumber}:\n${page.markdown}`)
           ].join("\n\n")
         }
       ]
@@ -583,6 +646,56 @@ export class MistralBlueprintRuleExtractor {
       );
     }
   }
+}
+
+function markingSchemeExtractionChunks(
+  pages: Array<{ pageNumber: number; markdown: string }>,
+  evaluatorInstructionPageNumbers: number[] = [],
+  markingSchemePageNumbers: number[] = []
+) {
+  const markingPageNumbers = new Set(markingSchemePageNumbers);
+  const instructionPageNumbers = new Set(evaluatorInstructionPageNumbers);
+  const markingPages = markingPageNumbers.size > 0 ? pages.filter((page) => markingPageNumbers.has(page.pageNumber)) : pages;
+  const instructionPages = pages.filter((page) => instructionPageNumbers.has(page.pageNumber));
+  if (instructionPages.length === 0 || markingPages.length === pages.length) return chunkPages(markingPages);
+  return chunkPages(markingPages).map((chunk) => [...instructionPages, ...chunk]);
+}
+
+function chunkPages(pages: Array<{ pageNumber: number; markdown: string }>) {
+  const chunks: Array<Array<{ pageNumber: number; markdown: string }>> = [];
+  let chunk: Array<{ pageNumber: number; markdown: string }> = [];
+  let characters = 0;
+  for (const page of pages) {
+    if (chunk.length > 0 && (chunk.length >= 6 || characters + page.markdown.length > 10_000)) {
+      chunks.push(chunk);
+      chunk = [];
+      characters = 0;
+    }
+    chunk.push(page);
+    characters += page.markdown.length;
+  }
+  if (chunk.length > 0) chunks.push(chunk);
+  return chunks.length > 0 ? chunks : [pages];
+}
+
+function averageConfidence(values: Array<number | null>) {
+  const known = values.filter((value): value is number => value !== null);
+  return known.length === 0 ? null : known.reduce((total, value) => total + value, 0) / known.length;
+}
+
+function sumDefined(values: Array<number | undefined>) {
+  const known = values.filter((value): value is number => value !== undefined);
+  return known.length === 0 ? undefined : known.reduce((total, value) => total + value, 0);
+}
+
+function uniqueBy<T>(values: T[], key: (value: T) => string) {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const valueKey = key(value);
+    if (seen.has(valueKey)) return false;
+    seen.add(valueKey);
+    return true;
+  });
 }
 
 export class MistralBatchProvider {

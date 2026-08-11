@@ -62,6 +62,16 @@ export interface BlueprintLanguageAnalysisResult {
     pageNumber: number;
     languages: BlueprintLanguageEvidenceResult[];
   }>;
+  documentAnalysis: {
+    isMarkingScheme: boolean;
+    confidence: number | null;
+    titleLanguageTag: string | null;
+    headerLanguageTag: string | null;
+    evidencePageNumbers: number[];
+    evaluatorInstructionPageNumbers: number[];
+    markingSchemePageNumbers: number[];
+    paperCode: string | null;
+  };
   rawJson: unknown;
   usage: {
     promptTokens?: number | undefined;

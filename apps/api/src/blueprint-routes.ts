@@ -277,7 +277,7 @@ export function registerBlueprintRoutes(app: FastifyInstance, config: ApiConfig)
       return reply.code(404).send({ error: "BLUEPRINT_NOT_FOUND" });
     }
     if (blueprintDocument.status !== "READY") {
-      return reply.code(409).send({ error: "BLUEPRINT_RULES_NOT_SAVED" });
+      return reply.code(409).send({ error: "BLUEPRINT_NOT_APPROVED" });
     }
     return blueprintSavedRulesPayload(blueprintDocument);
   });
@@ -451,11 +451,12 @@ export function registerBlueprintRoutes(app: FastifyInstance, config: ApiConfig)
   app.put<{ Params: BlueprintIdParams }>("/api/blueprints/:id/rules", async (request, reply) => {
     const input = blueprintDraftSaveSchema.parse(request.body);
     const update = await prisma.blueprintDocument.updateMany({
-      where: { id: request.params.id, status: "READY", reviewVersion: input.reviewVersion },
+      where: { id: request.params.id, status: "NEEDS_REVIEW", reviewVersion: input.reviewVersion },
       data: {
         draftRulesJson: blueprintRulesInputJson(input.rules),
         reviewVersion: { increment: 1 },
-        extractionError: null
+        extractionError: null,
+        status: "READY"
       }
     });
     if (update.count === 0) {
@@ -466,8 +467,8 @@ export function registerBlueprintRoutes(app: FastifyInstance, config: ApiConfig)
       if (!blueprintDocument) {
         return reply.code(404).send({ error: "BLUEPRINT_NOT_FOUND" });
       }
-      if (blueprintDocument.status !== "READY") {
-        return reply.code(409).send({ error: "BLUEPRINT_NOT_READY" });
+      if (blueprintDocument.status !== "NEEDS_REVIEW") {
+        return reply.code(409).send({ error: "BLUEPRINT_NOT_AWAITING_APPROVAL" });
       }
       return reply.code(409).send({
         error: "BLUEPRINT_REVIEW_VERSION_CONFLICT",

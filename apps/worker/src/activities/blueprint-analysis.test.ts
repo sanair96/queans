@@ -20,6 +20,16 @@ function languageAnalysisForPages(input: {
       pageNumber: page.pageNumber,
       languages: [{ tag: page.tag, confidence: 0.99 }]
     })),
+    documentAnalysis: {
+      isMarkingScheme: true,
+      confidence: 0.99,
+      titleLanguageTag: input.primaryLanguage,
+      headerLanguageTag: input.primaryLanguage,
+      evidencePageNumbers: [input.pageLanguages[0]?.pageNumber ?? 1],
+      evaluatorInstructionPageNumbers: [],
+      markingSchemePageNumbers: input.pageLanguages.map((page) => page.pageNumber),
+      paperCode: null
+    },
     rawJson: {},
     usage: {}
   };
@@ -93,7 +103,7 @@ describe("Blueprint OCR language and structure analysis", () => {
 
     expect(result.languageAnalysis.multilingualRelationship).toBe("DUPLICATE_TRANSLATIONS");
     expect(result.languageAnalysis.mixedLanguagePageNumbers).toEqual([]);
-    expect(result.languageAnalysis.primaryLanguage.requiresConfirmation).toBe(true);
+    expect(result.languageAnalysis.primaryLanguage.requiresConfirmation).toBe(false);
   });
 
   it("records headings, tables, lists, and key-value relationships as advisory structure evidence", () => {

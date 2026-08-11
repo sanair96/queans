@@ -595,7 +595,17 @@ describe("MistralBlueprintLanguageAnalyzer", () => {
                     page_languages: [
                       { page_number: 1, languages: [{ tag: "en", confidence: 0.99 }] },
                       { page_number: 2, languages: [{ tag: "hi", confidence: 0.99 }] }
-                    ]
+                    ],
+                    document_analysis: {
+                      is_marking_scheme: true,
+                      confidence: 0.98,
+                      title_language_tag: "hi",
+                      header_language_tag: "hi",
+                      evidence_page_numbers: [1, 2],
+                      evaluator_instruction_page_numbers: [1],
+                      marking_scheme_page_numbers: [2],
+                      paper_code: "3/8/1"
+                    }
                   })
                 }
               }
@@ -636,7 +646,7 @@ describe("MistralBlueprintLanguageAnalyzer", () => {
 });
 
 describe("MistralBlueprintRuleExtractor", () => {
-  it("preserves arbitrary rule JSON and requires primary-language output with source references", async () => {
+  it("requires strict marking-scheme JSON and source references", async () => {
     const fetchCalls: unknown[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (_input, init) => {
@@ -652,10 +662,7 @@ describe("MistralBlueprintRuleExtractor", () => {
               {
                 message: {
                   content: JSON.stringify({
-                    rules: {
-                      "खंड अ": { निर्देश: ["सभी प्रश्नों के उत्तर दीजिए"], अंक: 10 },
-                      internalChoice: true
-                    },
+                    rules: { document_metadata: { title: null, subject: "Hindi", examination: null, paper_code: "2/8/2", session: null, total_marks: 10, source_pages: [1] }, evaluation_rules: [{ rule: "सभी प्रश्नों के उत्तर दीजिए", source_pages: [1] }], assessment_blueprint: { sections: [{ name: "खंड अ", question_range: "1", question_type: null, choice_rules: [], declared_marks: 10, source_pages: [1] }], total_marks: 10, source_pages: [1] }, question_marking_scheme: [{ number: "1", section: "खंड अ", marks: 10, parts: [], alternatives: [], value_points: [], acceptable_answers: [], marking_notes: [], source_pages: [1] }] },
                     confidence: 0.91,
                     source_references: [{ page_number: 1, language_tag: "hi", snippet: "सभी प्रश्नों" }],
                     warnings: []
@@ -675,7 +682,7 @@ describe("MistralBlueprintRuleExtractor", () => {
       await expect(
         extractor.extractRules({ primaryLanguage: "hi", pages: [{ pageNumber: 1, markdown: "# खंड अ\nसभी प्रश्नों" }] })
       ).resolves.toMatchObject({
-        rules: { "खंड अ": { अंक: 10 }, internalChoice: true },
+        rules: { document_metadata: { paper_code: "2/8/2" }, question_marking_scheme: [{ number: "1", marks: 10 }] },
         sourceReferences: [{ pageNumber: 1, languageTag: "hi" }]
       });
     } finally {
@@ -692,7 +699,7 @@ describe("MistralBlueprintRuleExtractor", () => {
       }
     });
     const messages = request.messages as Array<{ role: string; content: string }>;
-    expect(messages[0]?.content).toContain("native hierarchy");
+    expect(messages[0]?.content).toContain("marking scheme");
     expect(messages[1]?.content).toContain("Designated primary language: hi");
   });
 });

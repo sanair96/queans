@@ -104,6 +104,13 @@ const apiConfig: ApiConfig = {
 };
 
 const { buildServer } = await import("./server.js");
+
+const markingSchemeRulesFixture = {
+  document_metadata: { title: null, subject: "Hindi", examination: null, paper_code: "2/8/2", session: null, total_marks: 10, source_pages: [1] },
+  evaluation_rules: [{ rule: "Answer all questions.", source_pages: [1] }],
+  assessment_blueprint: { sections: [{ name: "Section A", question_range: "1", question_type: null, choice_rules: [], declared_marks: 10, source_pages: [1] }], total_marks: 10, source_pages: [1] },
+  question_marking_scheme: [{ number: "1", section: "Section A", marks: 10, parts: [], alternatives: [], value_points: [], acceptable_answers: [], marking_notes: [], source_pages: [1] }]
+};
 const {
   blueprintDetailPayload,
   blueprintIngestionInputPayload,
@@ -391,7 +398,7 @@ describe("Blueprint API routes", () => {
       languageDetectionMetadata: null,
       status: "READY",
       pageCount: 2,
-      draftRulesJson: { sections: [{ label: "खंड अ", marks: 10 }] },
+      draftRulesJson: markingSchemeRulesFixture,
       extractionMetadataJson: null,
       confidenceSummaryJson: null,
       extractionError: null,
@@ -405,16 +412,16 @@ describe("Blueprint API routes", () => {
       const response = await app.inject({
         method: "PUT",
         url: "/api/blueprints/blueprint-1/rules",
-        payload: { rules: { sections: [{ label: "खंड अ", marks: 10 }] }, reviewVersion: 3 }
+        payload: { rules: markingSchemeRulesFixture, reviewVersion: 3 }
       });
 
       expect(response.statusCode).toBe(200);
       const updateCall: unknown = mocks.prisma.blueprintDocument.updateMany.mock.calls[0]?.[0];
       expect(updateCall).toMatchObject({
-        where: { id: "blueprint-1", status: "READY", reviewVersion: 3 },
-        data: { reviewVersion: { increment: 1 }, extractionError: null }
+        where: { id: "blueprint-1", status: "NEEDS_REVIEW", reviewVersion: 3 },
+        data: { reviewVersion: { increment: 1 }, extractionError: null, status: "READY" }
       });
-      expect(response.json()).toMatchObject({ reviewVersion: 4, draftRulesJson: { sections: [{ marks: 10 }] } });
+      expect(response.json()).toMatchObject({ reviewVersion: 4, draftRulesJson: { question_marking_scheme: [{ number: "1", marks: 10 }] } });
     } finally {
       await app.close();
     }
@@ -422,14 +429,14 @@ describe("Blueprint API routes", () => {
 
   it("reports a version conflict without overwriting newer Blueprint rules", async () => {
     mocks.prisma.blueprintDocument.updateMany.mockResolvedValue({ count: 0 });
-    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({ status: "READY", reviewVersion: 7 });
+    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({ status: "NEEDS_REVIEW", reviewVersion: 7 });
     const app = await buildServer(apiConfig);
 
     try {
       const response = await app.inject({
         method: "PUT",
         url: "/api/blueprints/blueprint-1/rules",
-        payload: { rules: "new rules", reviewVersion: 6 }
+        payload: { rules: markingSchemeRulesFixture, reviewVersion: 6 }
       });
 
       expect(response.statusCode).toBe(409);

@@ -58,7 +58,10 @@ describe("BlueprintIngestionWorkflow", () => {
     expect(activityMocks.persistBlueprintDraft).not.toHaveBeenCalled();
     expect(activityMocks.completeBlueprintWorkflow).not.toHaveBeenCalled();
     expect(activityMocks.failBlueprintWorkflow).toHaveBeenCalledOnce();
-    expect(activityMocks.failBlueprintWorkflow).toHaveBeenCalledWith(input);
+    expect(activityMocks.failBlueprintWorkflow).toHaveBeenCalledWith(input, {
+      step: "marking-scheme extraction",
+      message: "provider unavailable"
+    });
   });
 
   it("resumes extraction from stored OCR without invoking OCR again", async () => {

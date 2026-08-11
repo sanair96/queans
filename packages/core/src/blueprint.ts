@@ -203,9 +203,22 @@ export const blueprintExtractionEnvelopeSchema = z.object({
   providerMetadata: blueprintRulesJsonSchema.optional()
 });
 
+const markingSchemeSourcePagesSchema = z.array(z.number().int().positive()).min(1);
+const markingSchemeAlternativeSchema = z.object({ label: z.string().nullable(), marks: z.number().nonnegative().nullable(), value_points: z.array(z.string()), acceptable_answers: z.array(z.string()), marking_notes: z.array(z.string()), source_pages: markingSchemeSourcePagesSchema }).strict();
+const markingSchemePartSchema = z.object({ label: z.string().nullable(), marks: z.number().nonnegative().nullable(), value_points: z.array(z.string()), acceptable_answers: z.array(z.string()), marking_notes: z.array(z.string()), alternatives: z.array(markingSchemeAlternativeSchema), source_pages: markingSchemeSourcePagesSchema }).strict();
+const markingSchemeQuestionSchema = z.object({ number: z.string().min(1), section: z.string().nullable(), marks: z.number().nonnegative().nullable(), parts: z.array(markingSchemePartSchema), alternatives: z.array(markingSchemeAlternativeSchema), value_points: z.array(z.string()), acceptable_answers: z.array(z.string()), marking_notes: z.array(z.string()), source_pages: markingSchemeSourcePagesSchema }).strict();
+
+/** The only editable Blueprint shape: a reviewed marking scheme. */
+export const markingSchemeRulesJsonSchema = z.object({
+  document_metadata: z.object({ title: z.string().nullable(), subject: z.string().nullable(), examination: z.string().nullable(), paper_code: z.string().nullable(), session: z.string().nullable(), total_marks: z.number().nonnegative().nullable(), source_pages: markingSchemeSourcePagesSchema }).strict(),
+  evaluation_rules: z.array(z.object({ rule: z.string().min(1), source_pages: markingSchemeSourcePagesSchema }).strict()),
+  assessment_blueprint: z.object({ sections: z.array(z.object({ name: z.string().min(1), question_range: z.string().nullable(), question_type: z.string().nullable(), choice_rules: z.array(z.string()), declared_marks: z.number().nonnegative().nullable(), source_pages: markingSchemeSourcePagesSchema }).strict()), total_marks: z.number().nonnegative().nullable(), source_pages: markingSchemeSourcePagesSchema }).strict(),
+  question_marking_scheme: z.array(markingSchemeQuestionSchema)
+}).strict();
+
 export const blueprintDraftSaveSchema = z
   .object({
-    rules: blueprintRulesJsonSchema,
+    rules: markingSchemeRulesJsonSchema,
     reviewVersion: z.number().int().nonnegative()
   })
   .strict();

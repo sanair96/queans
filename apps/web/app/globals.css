@@ -1219,6 +1219,108 @@ h2 {
   color: var(--danger);
 }
 
+.marking-review-form {
+  display: grid;
+  gap: 28px;
+  padding: 4px 2px 24px;
+}
+
+.marking-review-section {
+  display: grid;
+  gap: 14px;
+  padding-bottom: 26px;
+  border-bottom: 1px solid #d9e4df;
+}
+
+.marking-review-section:last-child { border-bottom: 0; }
+
+.marking-review-heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.marking-review-heading > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 50%;
+  background: #dcefe7;
+  color: #17624d;
+  font: 700 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.marking-review-heading h3,
+.marking-review-heading p { margin: 0; }
+
+.marking-field-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.marking-field-grid.compact { grid-template-columns: 0.7fr 1.4fr 0.6fr; }
+
+.marking-field,
+.marking-list-field {
+  display: grid;
+  gap: 5px;
+  color: #466057;
+  font: 700 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.marking-field input,
+.marking-list-field textarea,
+.marking-textarea {
+  width: 100%;
+  border: 1px solid #c9d7d0;
+  border-radius: 6px;
+  background: #fffefa;
+  color: #263c34;
+  font: 400 14px/1.45 inherit;
+  padding: 9px 10px;
+}
+
+.marking-list-field textarea,
+.marking-textarea { min-height: 64px; resize: vertical; }
+.marking-textarea { min-height: 48px; }
+
+.marking-section-list,
+.marking-question-list,
+.marking-list { display: grid; gap: 10px; }
+
+.marking-section-card {
+  display: grid;
+  grid-template-columns: 1fr 1fr 0.55fr;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d5e3dc;
+  border-radius: 8px;
+  background: #f8fcfa;
+}
+
+.marking-question-card {
+  display: grid;
+  gap: 11px;
+  padding: 15px;
+  border: 1px solid #bfd7cc;
+  border-left: 4px solid #63a78e;
+  border-radius: 8px;
+  background: #fffefa;
+}
+
+.marking-question-top { display: flex; justify-content: space-between; gap: 12px; color: #27483c; }
+.marking-source { color: #6b8177; font: 600 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.marking-details { color: var(--muted); font-size: 13px; }
+.marking-details summary { cursor: pointer; color: #2b6d59; font-weight: 700; }
+
+@media (max-width: 760px) {
+  .marking-field-grid,
+  .marking-field-grid.compact,
+  .marking-section-card { grid-template-columns: 1fr; }
+}
+
 .blueprint-page-header {
   margin-bottom: 14px;
 }

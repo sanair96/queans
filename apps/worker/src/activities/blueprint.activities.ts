@@ -16,6 +16,7 @@ import {
   parsePersistedBlueprintExtraction,
   R2ObjectStore
 } from "@queans/providers";
+import type { BlueprintWorkflowFailure } from "../workflows/blueprint-ingestion.workflow.js";
 
 import { analyzeBlueprintOcrPages, plainTextFromMarkdown } from "./blueprint-analysis.js";
 import { toInputJson } from "../json.js";
@@ -47,6 +48,8 @@ export async function ocrBlueprintDocument(input: BlueprintIngestionWorkflowInpu
   });
 
   for (const page of result.pages) {
+    const markdown = page.markdown;
+    const plainText = page.plainText ?? plainTextFromMarkdown(markdown);
     await prisma.blueprintOcrPage.upsert({
       where: {
         blueprintDocumentId_pageNumber: {
@@ -57,8 +60,8 @@ export async function ocrBlueprintDocument(input: BlueprintIngestionWorkflowInpu
       create: {
         blueprintDocumentId: blueprintDocument.id,
         pageNumber: page.pageNumber,
-        markdownText: page.markdown,
-        plainText: page.plainText ?? plainTextFromMarkdown(page.markdown),
+        markdownText: markdown,
+        plainText,
         ocrConfidence: page.averageConfidence ?? null,
         providerMetadata: toInputJson({
           provider: result.provider,
@@ -68,8 +71,8 @@ export async function ocrBlueprintDocument(input: BlueprintIngestionWorkflowInpu
         })
       },
       update: {
-        markdownText: page.markdown,
-        plainText: page.plainText ?? plainTextFromMarkdown(page.markdown),
+        markdownText: markdown,
+        plainText,
         ocrConfidence: page.averageConfidence ?? null,
         providerMetadata: toInputJson({
           provider: result.provider,
@@ -144,14 +147,28 @@ export async function extractBlueprintRules(input: BlueprintIngestionWorkflowInp
   if (blueprintDocument.rawExtractionJson) {
     return;
   }
-
   const languageAnalysis = blueprintLanguageAnalysisSchema.safeParse(blueprintDocument.languageDetectionMetadata);
-  const primaryLanguage = languageAnalysis.success ? languageAnalysis.data.primaryLanguage.tag : null;
-  const requiresLanguageConfirmation = languageAnalysis.success && languageAnalysis.data.primaryLanguage.requiresConfirmation;
+  if (!languageAnalysis.success) {
+    await markBlueprintNeedsReview({
+      blueprintDocumentId: blueprintDocument.id,
+      error: "Language and document analysis must complete before Blueprint rules can be extracted."
+    });
+    return;
+  }
+  const primaryLanguage = languageAnalysis.data.primaryLanguage.tag;
+  const requiresLanguageConfirmation = languageAnalysis.data.primaryLanguage.requiresConfirmation;
   if (!primaryLanguage || requiresLanguageConfirmation) {
     await markBlueprintNeedsReview({
       blueprintDocumentId: blueprintDocument.id,
       error: "A primary language must be selected or confirmed before Blueprint rules can be extracted."
+    });
+    return;
+  }
+
+  if (!isRecognizedMarkingScheme(languageAnalysis.data.metadata)) {
+    await markBlueprintNeedsReview({
+      blueprintDocumentId: blueprintDocument.id,
+      error: "This document could not be recognized as a marking scheme. Check the upload or replace it with the marking-scheme PDF."
     });
     return;
   }
@@ -161,7 +178,8 @@ export async function extractBlueprintRules(input: BlueprintIngestionWorkflowInp
   try {
     const extraction = await extractor.extractRules({
       primaryLanguage,
-      pages: blueprintDocument.ocrPages.map((page) => ({ pageNumber: page.pageNumber, markdown: page.markdownText }))
+      pages: blueprintDocument.ocrPages.map((page) => ({ pageNumber: page.pageNumber, markdown: page.markdownText })),
+      ...documentPageRoles(languageAnalysis.data.metadata)
     });
     const persistedExtraction = createPersistedBlueprintExtraction(extraction);
     rawExtractionJson = persistedExtraction;
@@ -210,6 +228,28 @@ export async function extractBlueprintRules(input: BlueprintIngestionWorkflowInp
     }
     throw error;
   }
+}
+
+function documentPageRoles(metadata: unknown) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return {};
+  const documentAnalysis = (metadata as Record<string, unknown>).documentAnalysis;
+  if (!documentAnalysis || typeof documentAnalysis !== "object" || Array.isArray(documentAnalysis)) return {};
+  const record = documentAnalysis as Record<string, unknown>;
+  const pageNumbers = (value: unknown) => Array.isArray(value)
+    ? value.filter((pageNumber): pageNumber is number => Number.isInteger(pageNumber) && pageNumber > 0)
+    : [];
+  return {
+    evaluatorInstructionPageNumbers: pageNumbers(record.evaluatorInstructionPageNumbers),
+    markingSchemePageNumbers: pageNumbers(record.markingSchemePageNumbers)
+  };
+}
+
+function isRecognizedMarkingScheme(metadata: unknown) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
+  const documentAnalysis = (metadata as Record<string, unknown>).documentAnalysis;
+  if (!documentAnalysis || typeof documentAnalysis !== "object" || Array.isArray(documentAnalysis)) return false;
+  const record = documentAnalysis as Record<string, unknown>;
+  return record.isMarkingScheme === true && typeof record.confidence === "number" && record.confidence >= 0.7;
 }
 
 export async function persistBlueprintDraft(input: BlueprintIngestionWorkflowInput) {
@@ -326,7 +366,7 @@ export async function completeBlueprintWorkflow(input: BlueprintIngestionWorkflo
         status: "PROCESSING",
         draftRulesJson: { not: Prisma.DbNull }
       },
-      data: { status: "READY" }
+      data: { status: "NEEDS_REVIEW" }
     }),
     prisma.workflowEvent.create({
       data: {
@@ -340,7 +380,8 @@ export async function completeBlueprintWorkflow(input: BlueprintIngestionWorkflo
   return { completed: true };
 }
 
-export async function failBlueprintWorkflow(input: BlueprintIngestionWorkflowInput) {
+export async function failBlueprintWorkflow(input: BlueprintIngestionWorkflowInput, failure: BlueprintWorkflowFailure) {
+  const detail = `Blueprint ingestion failed during ${failure.step}: ${failure.message}`;
   const claimed = await prisma.workflowRun.updateMany({
     where: {
       id: input.workflowRunId,
@@ -350,7 +391,7 @@ export async function failBlueprintWorkflow(input: BlueprintIngestionWorkflowInp
     },
     data: {
       status: "FAILED",
-      errorPayload: { code: "BLUEPRINT_WORKFLOW_FAILED" },
+      errorPayload: { code: "BLUEPRINT_WORKFLOW_FAILED", step: failure.step, message: failure.message },
       completedAt: new Date()
     }
   });
@@ -366,14 +407,14 @@ export async function failBlueprintWorkflow(input: BlueprintIngestionWorkflowInp
       },
       data: {
         status: "FAILED",
-        extractionError: "Blueprint ingestion workflow failed."
+        extractionError: detail
       }
     }),
     prisma.workflowEvent.create({
       data: {
         workflowRunId: input.workflowRunId,
         eventType: "BLUEPRINT_WORKFLOW_FAILED",
-        eventPayload: { blueprintDocumentId: input.blueprintDocumentId }
+        eventPayload: { blueprintDocumentId: input.blueprintDocumentId, step: failure.step, message: failure.message }
       }
     })
   ]);

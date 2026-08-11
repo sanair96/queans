@@ -127,11 +127,11 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
     }
   }
 
-  const canContinueExtraction = blueprint.status === "NEEDS_REVIEW" && !requiresLanguageDecision;
+  const canContinueExtraction = blueprint.status === "NEEDS_REVIEW" && editedRules === undefined && !requiresLanguageDecision;
   const canRetryExtraction = blueprint.status === "FAILED";
 
   async function saveRules() {
-    if (editedRules === undefined || !rulesDirty) {
+    if (editedRules === undefined) {
       return false;
     }
 
@@ -153,7 +153,7 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
       const updatedRules = isBlueprintJsonValue(updated.draftRulesJson) ? updated.draftRulesJson : undefined;
       setEditedRules(updatedRules);
       setSavedRules(updatedRules);
-      setRulesNotice("Saved.");
+      setRulesNotice("Blueprint approved and saved.");
       return true;
     } catch (error) {
       setRulesNotice(error instanceof Error ? error.message : "Blueprint rules could not be saved.");
@@ -260,9 +260,9 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
           ) : (
             <>
               <div className="blueprint-rule-summary">
-                <strong>{rulesDirty ? "Unsaved rule edits" : "Extracted rule draft"}</strong>
-                <p className="muted">Open the focused editor to read and modify the extracted values without the nested tree layout.</p>
-                <button className="btn compact" type="button" onClick={() => setRuleEditorOpen(true)}>Open rule editor</button>
+                <strong>{rulesDirty ? "Unapproved edits" : "Extraction ready for review"}</strong>
+                <p className="muted">Review the marking scheme in the form, check source pages, then approve it to save this Blueprint.</p>
+                <button className="btn compact" type="button" onClick={() => setRuleEditorOpen(true)}>Review marking scheme</button>
               </div>
               {rulesNotice ? <div className="status compact">{rulesNotice}</div> : null}
             </>
@@ -275,7 +275,7 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
           value={editedRules}
           dirty={rulesDirty}
           saving={savingRules}
-          canSave={blueprint.status === "READY"}
+          canSave={blueprint.status === "NEEDS_REVIEW"}
           notice={rulesNotice}
           onChange={(value) => {
             setEditedRules(value);
