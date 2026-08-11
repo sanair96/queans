@@ -680,7 +680,15 @@ describe("MistralBlueprintRuleExtractor", () => {
     try {
       const extractor = new MistralBlueprintRuleExtractor(testMistralConfig);
       await expect(
-        extractor.extractRules({ primaryLanguage: "hi", pages: [{ pageNumber: 1, markdown: "# खंड अ\nसभी प्रश्नों" }] })
+        extractor.extractRules({
+          primaryLanguage: "hi",
+          pages: [{
+            pageNumber: 1,
+            markdown: "# खंड अ\nसभी प्रश्नों",
+            blocks: [{ blockType: "table", text: "1. पांच अंक", confidence: 0.9, boundingBox: { x: 10 }, sourceAsset: { imageId: "diagram-1" } }],
+            assets: [{ sourceAssetId: "diagram-1", fileName: "diagram-1.png", mimeType: "image/png", boundingBox: { x: 20 }, metadata: { provider: "mistral" } }]
+          }]
+        })
       ).resolves.toMatchObject({
         rules: { document_metadata: { paper_code: "2/8/2" }, question_marking_scheme: [{ number: "1", marks: 10 }] },
         sourceReferences: [{ pageNumber: 1, languageTag: "hi" }]
@@ -701,6 +709,9 @@ describe("MistralBlueprintRuleExtractor", () => {
     const messages = request.messages as Array<{ role: string; content: string }>;
     expect(messages[0]?.content).toContain("marking scheme");
     expect(messages[1]?.content).toContain("Designated primary language: hi");
+    expect(messages[1]?.content).toContain("Layout blocks:");
+    expect(messages[1]?.content).toContain("source_asset={\"imageId\":\"diagram-1\"}");
+    expect(messages[1]?.content).toContain("id=diagram-1; file=diagram-1.png; mime_type=image/png");
   });
 });
 

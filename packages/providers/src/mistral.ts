@@ -3,10 +3,12 @@ import { z } from "zod";
 import {
   BlueprintExtractionResponseError,
   blueprintExtractionJsonSchema,
+  blueprintOcrPageContextPrompt,
   blueprintExtractionSystemPrompt,
   mergeMarkingSchemeRules,
   parseBlueprintExtractionResult
 } from "./blueprint-extraction-contract.js";
+import type { BlueprintStructuredOcrPage } from "./types.js";
 import type {
   BlueprintExtractionResult,
   BlueprintLanguageAnalysisResult,
@@ -588,7 +590,7 @@ export class MistralBlueprintRuleExtractor {
 
   async extractRules(input: {
     primaryLanguage: string;
-    pages: Array<{ pageNumber: number; markdown: string }>;
+    pages: BlueprintStructuredOcrPage[];
     evaluatorInstructionPageNumbers?: number[];
     markingSchemePageNumbers?: number[];
   }): Promise<BlueprintExtractionResult> {
@@ -612,7 +614,7 @@ export class MistralBlueprintRuleExtractor {
     };
   }
 
-  private async extractChunk(primaryLanguage: string, pages: Array<{ pageNumber: number; markdown: string }>): Promise<BlueprintExtractionResult> {
+  private async extractChunk(primaryLanguage: string, pages: BlueprintStructuredOcrPage[]): Promise<BlueprintExtractionResult> {
     const raw = await callMistral(this.config, "/v1/chat/completions", {
       model: this.config.extractorModel,
       temperature: 0,
@@ -631,7 +633,7 @@ export class MistralBlueprintRuleExtractor {
           content: [
             `Designated primary language: ${primaryLanguage}`,
             "OCR pages:",
-            ...pages.map((page) => `Page ${page.pageNumber}:\n${page.markdown}`)
+            ...pages.map(blueprintOcrPageContextPrompt)
           ].join("\n\n")
         }
       ]
@@ -649,7 +651,7 @@ export class MistralBlueprintRuleExtractor {
 }
 
 function markingSchemeExtractionChunks(
-  pages: Array<{ pageNumber: number; markdown: string }>,
+  pages: BlueprintStructuredOcrPage[],
   evaluatorInstructionPageNumbers: number[] = [],
   markingSchemePageNumbers: number[] = []
 ) {
@@ -661,9 +663,9 @@ function markingSchemeExtractionChunks(
   return chunkPages(markingPages).map((chunk) => [...instructionPages, ...chunk]);
 }
 
-function chunkPages(pages: Array<{ pageNumber: number; markdown: string }>) {
-  const chunks: Array<Array<{ pageNumber: number; markdown: string }>> = [];
-  let chunk: Array<{ pageNumber: number; markdown: string }> = [];
+function chunkPages(pages: BlueprintStructuredOcrPage[]) {
+  const chunks: BlueprintStructuredOcrPage[][] = [];
+  let chunk: BlueprintStructuredOcrPage[] = [];
   let characters = 0;
   for (const page of pages) {
     if (chunk.length > 0 && (chunk.length >= 6 || characters + page.markdown.length > 10_000)) {

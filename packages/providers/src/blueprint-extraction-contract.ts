@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { BlueprintExtractionResult } from "./types.js";
+import type { BlueprintExtractionResult, BlueprintStructuredOcrPage } from "./types.js";
 
 const sourcePagesSchema = z.array(z.number().int().positive()).min(1);
 
@@ -34,6 +34,48 @@ const markingQuestionSchema = z.object({
   marking_notes: z.array(z.string()),
   source_pages: sourcePagesSchema
 }).strict();
+
+const skeletonQuestionSchema = z.object({
+  number: z.string().min(1),
+  section: z.string().nullable(),
+  marks: z.number().nonnegative().nullable(),
+  part_labels: z.array(z.string().min(1)),
+  alternative_labels: z.array(z.string().min(1)),
+  source_pages: sourcePagesSchema
+}).strict();
+
+export const blueprintSkeletonSchema = z.object({
+  document_metadata: z.object({
+    title: z.string().nullable(),
+    subject: z.string().nullable(),
+    examination: z.string().nullable(),
+    paper_code: z.string().nullable(),
+    session: z.string().nullable(),
+    total_marks: z.number().nonnegative().nullable(),
+    source_pages: sourcePagesSchema
+  }).strict(),
+  evaluation_rules: z.array(z.object({ rule: z.string().min(1), source_pages: sourcePagesSchema }).strict()),
+  assessment_blueprint: z.object({
+    sections: z.array(z.object({
+      name: z.string().min(1),
+      question_range: z.string().nullable(),
+      question_type: z.string().nullable(),
+      choice_rules: z.array(z.string()),
+      declared_marks: z.number().nonnegative().nullable(),
+      source_pages: sourcePagesSchema
+    }).strict()),
+    total_marks: z.number().nonnegative().nullable(),
+    source_pages: sourcePagesSchema
+  }).strict(),
+  question_index: z.array(skeletonQuestionSchema)
+}).strict();
+
+export const questionSchemeSchema = z.object({
+  question_marking_scheme: z.array(markingQuestionSchema)
+}).strict();
+
+export type BlueprintSkeleton = z.output<typeof blueprintSkeletonSchema>;
+export type QuestionScheme = z.output<typeof questionSchemeSchema>;
 
 export const markingSchemeRulesSchema = z.object({
   document_metadata: z.object({
@@ -89,6 +131,32 @@ const blueprintCompletionSchema = z.object({
   usage: z.object({ prompt_tokens: z.number().optional(), completion_tokens: z.number().optional(), total_tokens: z.number().optional() }).optional()
 });
 
+const sourceReferenceSchema = z.object({
+  page_number: z.number().int().positive(),
+  language_tag: z.string().min(1).optional(),
+  snippet: z.string().max(500_000).optional(),
+  start_offset: z.number().int().nonnegative().optional(),
+  end_offset: z.number().int().nonnegative().optional(),
+  confidence: z.number().min(0).max(1).nullable().optional()
+}).superRefine((value, context) => {
+  if ((value.start_offset === undefined) !== (value.end_offset === undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Source offsets must be supplied as a pair." });
+  }
+  if (value.start_offset !== undefined && value.end_offset !== undefined && value.end_offset < value.start_offset) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Source end offset must not precede start offset." });
+  }
+});
+
+const extractionPassEnvelope = <TScheme extends z.ZodTypeAny>(scheme: TScheme) => z.object({
+  result: scheme,
+  confidence: z.number().min(0).max(1).nullable(),
+  source_references: z.array(sourceReferenceSchema),
+  warnings: z.array(z.string().max(10_000))
+}).strict();
+
+export const blueprintSkeletonExtractionResponseSchema = extractionPassEnvelope(blueprintSkeletonSchema);
+export const questionSchemeExtractionResponseSchema = extractionPassEnvelope(questionSchemeSchema);
+
 const nullableString = { type: ["string", "null"] };
 const sourcePagesJsonSchema = { type: "array", minItems: 1, items: { type: "integer", minimum: 1 } };
 const alternativeJsonSchema = {
@@ -112,6 +180,58 @@ export const blueprintExtractionJsonSchema = {
   }
 } as const;
 
+const blueprintRulesJsonSchema = blueprintExtractionJsonSchema.properties.rules;
+const extractionEnvelopeJsonProperties = blueprintExtractionJsonSchema.properties;
+const skeletonQuestionJsonSchema = {
+  type: "object", additionalProperties: false,
+  required: ["number", "section", "marks", "part_labels", "alternative_labels", "source_pages"],
+  properties: {
+    number: { type: "string", minLength: 1 },
+    section: nullableString,
+    marks: { type: ["number", "null"], minimum: 0 },
+    part_labels: { type: "array", items: { type: "string", minLength: 1 } },
+    alternative_labels: { type: "array", items: { type: "string", minLength: 1 } },
+    source_pages: sourcePagesJsonSchema
+  }
+} as const;
+
+const blueprintSkeletonJsonSchema = {
+  type: "object", additionalProperties: false,
+  required: ["document_metadata", "evaluation_rules", "assessment_blueprint", "question_index"],
+  properties: {
+    document_metadata: blueprintRulesJsonSchema.properties.document_metadata,
+    evaluation_rules: blueprintRulesJsonSchema.properties.evaluation_rules,
+    assessment_blueprint: blueprintRulesJsonSchema.properties.assessment_blueprint,
+    question_index: { type: "array", items: skeletonQuestionJsonSchema }
+  }
+} as const;
+
+const questionSchemeJsonSchema = {
+  type: "object", additionalProperties: false,
+  required: ["question_marking_scheme"],
+  properties: {
+    question_marking_scheme: blueprintRulesJsonSchema.properties.question_marking_scheme
+  }
+} as const;
+
+function extractionPassJsonSchema<T extends object>(title: string, resultSchema: T) {
+  return {
+    title,
+    type: "object",
+    additionalProperties: false,
+    required: ["result", "confidence", "source_references", "warnings"],
+    properties: {
+      result: resultSchema,
+      confidence: extractionEnvelopeJsonProperties.confidence,
+      source_references: extractionEnvelopeJsonProperties.source_references,
+      warnings: extractionEnvelopeJsonProperties.warnings
+    }
+  } as const;
+}
+
+export const blueprintSkeletonExtractionJsonSchema = extractionPassJsonSchema("BlueprintSkeletonExtraction", blueprintSkeletonJsonSchema);
+export const questionSchemeExtractionJsonSchema = extractionPassJsonSchema("QuestionSchemeExtraction", questionSchemeJsonSchema);
+
 export const blueprintExtractionSystemPrompt = [
   "Extract the uploaded marking scheme, rubric, answer key, or assessment blueprint as JSON matching the supplied schema exactly: document_metadata, evaluation_rules, assessment_blueprint, and question_marking_scheme.",
   "Output ALL extracted blueprint text strictly in English. If the input paper or marking scheme is in another language (e.g. Hindi, Sanskrit, regional/foreign languages), translate the content, question text, options, answer criteria, and value points directly into accurate English so as not to lose meaning, nuance, or key evaluation details.",
@@ -119,6 +239,76 @@ export const blueprintExtractionSystemPrompt = [
   "For every section, question, part, alternative, and value point, preserve marks and source_pages. Use empty arrays and null only when the source does not state a value.",
   "Do not invent answers, combine alternatives, duplicate boilerplate under each question, or include evidence snippets inside rules. Put uncertainty into warnings."
 ].join(" ");
+
+const englishTranslationAndEvidenceInstructions = [
+  "Output all extracted semantic text strictly in English. Translate non-English question text, options, answer criteria, value points, and evaluator guidance accurately without losing meaning.",
+  "Every extracted item must include the source_pages on which it appears; never infer a page number."
+].join(" ");
+
+export const blueprintSkeletonExtractionSystemPrompt = [
+  "Extract only the structural skeleton of the marking scheme as JSON matching the supplied schema exactly.",
+  "Return document_metadata, evaluation_rules, assessment_blueprint, and question_index. The question_index must identify question numbers, sections, declared marks, part labels, alternative labels, and source_pages, but must not contain answer criteria or value points.",
+  englishTranslationAndEvidenceInstructions,
+  "Use document content, never filenames, for identity. Do not invent question numbers, ranges, marks, or choices; record uncertainty in warnings."
+].join(" ");
+
+export const questionSchemeExtractionSystemPrompt = [
+  "Extract detailed question-wise marking schemes as JSON matching the supplied schema exactly.",
+  "Use the supplied consolidated skeleton only as a structural guide. Extract answer criteria, value points, acceptable answers, marking notes, parts, and alternatives only when supported by the OCR page context.",
+  englishTranslationAndEvidenceInstructions,
+  "Do not duplicate general evaluator guidance, invent answers, merge alternatives, or omit source_pages. Record conflicts with the skeleton or uncertain OCR in warnings."
+].join(" ");
+
+/** Formats persisted OCR text, layout blocks, and asset metadata for either extraction pass. */
+export function blueprintOcrPageContextPrompt(page: BlueprintStructuredOcrPage): string {
+  const blocks = page.blocks ?? [];
+  const assets = page.assets ?? [];
+  return [
+    `Page ${page.pageNumber}`,
+    `OCR confidence: avg=${page.averageConfidence ?? "unknown"}; min=${page.minimumConfidence ?? "unknown"}`,
+    `Page dimensions: width=${page.width ?? "unknown"}; height=${page.height ?? "unknown"}; dpi=${page.dpi ?? "unknown"}`,
+    "Layout blocks:",
+    ...(blocks.length > 0 ? blocks.map((block, index) => `${index + 1}. ${block.blockType}; confidence=${block.confidence ?? "unknown"}; text=${block.text}; bounding_box=${jsonForPrompt(block.boundingBox)}; source_asset=${jsonForPrompt(block.sourceAsset)}`) : ["- none"]),
+    "Image and diagram assets (metadata only; no pixels are available):",
+    ...(assets.length > 0 ? assets.map((asset, index) => `${index + 1}. id=${asset.sourceAssetId}; file=${asset.fileName}; mime_type=${asset.mimeType}; bounding_box=${jsonForPrompt(asset.boundingBox)}; metadata=${jsonForPrompt(asset.metadata)}`) : ["- none"]),
+    "OCR markdown:",
+    page.markdown
+  ].join("\n");
+}
+
+export function blueprintSkeletonExtractionUserPrompt(input: {
+  primaryLanguage: string;
+  pages: BlueprintStructuredOcrPage[];
+}): string {
+  return [
+    `Designated primary language: ${input.primaryLanguage}`,
+    "OCR page context:",
+    ...input.pages.map(blueprintOcrPageContextPrompt)
+  ].join("\n\n");
+}
+
+export function questionSchemeExtractionUserPrompt(input: {
+  primaryLanguage: string;
+  skeleton: BlueprintSkeleton;
+  pages: BlueprintStructuredOcrPage[];
+}): string {
+  return [
+    `Designated primary language: ${input.primaryLanguage}`,
+    "Consolidated structural skeleton (guide only):",
+    jsonForPrompt(input.skeleton),
+    "OCR page context:",
+    ...input.pages.map(blueprintOcrPageContextPrompt)
+  ].join("\n\n");
+}
+
+function jsonForPrompt(value: unknown) {
+  if (value === undefined || value === null) return "null";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "[unserializable metadata]";
+  }
+}
 
 export class BlueprintExtractionResponseError extends Error {
   constructor(message: string, readonly rawJson: unknown) { super(message); this.name = "BlueprintExtractionResponseError"; }

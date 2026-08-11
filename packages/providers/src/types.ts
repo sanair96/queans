@@ -41,6 +41,37 @@ export interface OcrResult {
   rawJson: unknown;
 }
 
+/** Durable OCR layout context supplied with a Blueprint page. Image pixels are deliberately excluded. */
+export interface BlueprintOcrLayoutBlock {
+  blockType: string;
+  text: string;
+  confidence?: number | null | undefined;
+  boundingBox?: unknown;
+  sourceAsset?: unknown;
+}
+
+/** Durable metadata for an OCR image or diagram asset referenced by a Blueprint page. */
+export interface BlueprintOcrAssetContext {
+  sourceAssetId: string;
+  fileName: string;
+  mimeType: string;
+  boundingBox?: unknown;
+  metadata?: unknown;
+}
+
+export interface BlueprintStructuredOcrPage {
+  pageNumber: number;
+  markdown: string;
+  plainText?: string | null | undefined;
+  averageConfidence?: number | null | undefined;
+  minimumConfidence?: number | null | undefined;
+  width?: number | null | undefined;
+  height?: number | null | undefined;
+  dpi?: number | null | undefined;
+  blocks?: BlueprintOcrLayoutBlock[] | undefined;
+  assets?: BlueprintOcrAssetContext[] | undefined;
+}
+
 export interface BlueprintLanguageEvidenceResult {
   tag: string;
   displayName?: string | undefined;

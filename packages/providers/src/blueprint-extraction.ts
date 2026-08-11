@@ -1,10 +1,12 @@
 import { loadMistralConfigFromEnv, MistralBlueprintRuleExtractor } from "./mistral.js";
-import type { BlueprintExtractionResult, BlueprintSourceReferenceResult } from "./types.js";
+import type { BlueprintExtractionResult, BlueprintSourceReferenceResult, BlueprintStructuredOcrPage } from "./types.js";
+
+export type { BlueprintOcrAssetContext, BlueprintOcrLayoutBlock, BlueprintStructuredOcrPage } from "./types.js";
 
 export interface BlueprintRuleExtractor {
   extractRules(input: {
     primaryLanguage: string;
-    pages: Array<{ pageNumber: number; markdown: string }>;
+    pages: BlueprintStructuredOcrPage[];
     evaluatorInstructionPageNumbers?: number[];
     markingSchemePageNumbers?: number[];
   }): Promise<BlueprintExtractionResult>;
