@@ -114,6 +114,7 @@ export const blueprintExtractionJsonSchema = {
 
 export const blueprintExtractionSystemPrompt = [
   "Extract the uploaded marking scheme, rubric, answer key, or assessment blueprint as JSON matching the supplied schema exactly: document_metadata, evaluation_rules, assessment_blueprint, and question_marking_scheme.",
+  "Output ALL extracted blueprint text strictly in English. If the input paper or marking scheme is in another language (e.g. Hindi, Sanskrit, regional/foreign languages), translate the content, question text, options, answer criteria, and value points directly into accurate English so as not to lose meaning, nuance, or key evaluation details.",
   "Use document content, never its filename, for paper code and identity. Extract general evaluator guidance only into evaluation_rules.",
   "For every section, question, part, alternative, and value point, preserve marks and source_pages. Use empty arrays and null only when the source does not state a value.",
   "Do not invent answers, combine alternatives, duplicate boilerplate under each question, or include evidence snippets inside rules. Put uncertainty into warnings."

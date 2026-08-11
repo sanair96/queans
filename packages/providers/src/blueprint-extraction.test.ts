@@ -13,8 +13,9 @@ describe("Blueprint extraction provider selection", () => {
 });
 
 describe("marking-scheme extraction contract", () => {
-  it("asks for evaluation rules, the assessment blueprint, and question-wise marking details", () => {
+  it("asks for evaluation rules, the assessment blueprint, and question-wise marking details strictly in English", () => {
     expect(blueprintExtractionSystemPrompt).not.toContain("CBSE");
+    expect(blueprintExtractionSystemPrompt).toContain("English");
     expect(blueprintExtractionSystemPrompt).toContain("evaluation_rules");
     expect(blueprintExtractionSystemPrompt).toContain("assessment_blueprint");
     expect(blueprintExtractionSystemPrompt).toContain("question_marking_scheme");

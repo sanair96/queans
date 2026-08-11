@@ -19,7 +19,7 @@ import {
 import type { BlueprintWorkflowFailure } from "../workflows/blueprint-ingestion.workflow.js";
 
 import { analyzeBlueprintOcrPages, plainTextFromMarkdown } from "./blueprint-analysis.js";
-import { toInputJson } from "../json.js";
+import { toInputJson, toNullableInputJson } from "../json.js";
 
 export async function ocrBlueprintDocument(input: BlueprintIngestionWorkflowInput) {
   const blueprintDocument = await prisma.blueprintDocument.findUnique({
@@ -63,6 +63,25 @@ export async function ocrBlueprintDocument(input: BlueprintIngestionWorkflowInpu
         markdownText: markdown,
         plainText,
         ocrConfidence: page.averageConfidence ?? null,
+        ocrBlocks: {
+          create: (page.blocks ?? []).map((block) => ({
+            blockType: block.blockType,
+            text: block.text,
+            confidence: block.confidence ?? null,
+            boundingBox: toNullableInputJson(block.boundingBox),
+            sourceAsset: toNullableInputJson(block.sourceAsset),
+            rawJson: toNullableInputJson(block.rawJson)
+          }))
+        },
+        ocrAssets: {
+          create: (page.images ?? []).map((image) => ({
+            sourceAssetId: image.id,
+            fileName: image.fileName,
+            mimeType: image.mimeType,
+            boundingBox: toNullableInputJson(image.boundingBox),
+            rawJson: toNullableInputJson(image.rawJson)
+          }))
+        },
         providerMetadata: toInputJson({
           provider: result.provider,
           model: result.model,
@@ -74,6 +93,27 @@ export async function ocrBlueprintDocument(input: BlueprintIngestionWorkflowInpu
         markdownText: markdown,
         plainText,
         ocrConfidence: page.averageConfidence ?? null,
+        ocrBlocks: {
+          deleteMany: {},
+          create: (page.blocks ?? []).map((block) => ({
+            blockType: block.blockType,
+            text: block.text,
+            confidence: block.confidence ?? null,
+            boundingBox: toNullableInputJson(block.boundingBox),
+            sourceAsset: toNullableInputJson(block.sourceAsset),
+            rawJson: toNullableInputJson(block.rawJson)
+          }))
+        },
+        ocrAssets: {
+          deleteMany: {},
+          create: (page.images ?? []).map((image) => ({
+            sourceAssetId: image.id,
+            fileName: image.fileName,
+            mimeType: image.mimeType,
+            boundingBox: toNullableInputJson(image.boundingBox),
+            rawJson: toNullableInputJson(image.rawJson)
+          }))
+        },
         providerMetadata: toInputJson({
           provider: result.provider,
           model: result.model,

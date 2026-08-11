@@ -289,9 +289,44 @@ model BlueprintOcrPage {
   createdAt           DateTime          @default(now()) @map("created_at")
   updatedAt           DateTime          @updatedAt @map("updated_at")
 
+  ocrBlocks BlueprintOcrBlock[]
+  ocrAssets BlueprintOcrAsset[]
+
   @@unique([blueprintDocumentId, pageNumber])
   @@index([blueprintDocumentId, pageNumber])
   @@map("blueprint_ocr_pages")
+}
+
+model BlueprintOcrBlock {
+  id                  String           @id @default(uuid())
+  blueprintOcrPageId  String           @map("blueprint_ocr_page_id")
+  blueprintOcrPage    BlueprintOcrPage @relation(fields: [blueprintOcrPageId], references: [id], onDelete: Cascade)
+  blockType           String           @map("block_type")
+  text                String
+  confidence          Float?
+  boundingBox         Json?            @map("bounding_box")
+  sourceAsset         Json?            @map("source_asset")
+  rawJson             Json?            @map("raw_json")
+  createdAt           DateTime         @default(now()) @map("created_at")
+
+  @@index([blueprintOcrPageId, blockType])
+  @@map("blueprint_ocr_blocks")
+}
+
+model BlueprintOcrAsset {
+  id                  String           @id @default(uuid())
+  blueprintOcrPageId  String           @map("blueprint_ocr_page_id")
+  blueprintOcrPage    BlueprintOcrPage @relation(fields: [blueprintOcrPageId], references: [id], onDelete: Cascade)
+  sourceAssetId       String           @map("source_asset_id")
+  fileName            String           @map("file_name")
+  mimeType            String           @map("mime_type")
+  boundingBox         Json?            @map("bounding_box")
+  rawJson             Json?            @map("raw_json")
+  createdAt           DateTime         @default(now()) @map("created_at")
+
+  @@unique([blueprintOcrPageId, sourceAssetId])
+  @@index([blueprintOcrPageId])
+  @@map("blueprint_ocr_assets")
 }
 
 model WorkflowRun {

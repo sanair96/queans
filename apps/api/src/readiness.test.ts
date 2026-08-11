@@ -91,7 +91,9 @@ describe("checkDatabaseReady", () => {
         { table_name: "workflow_runs", column_name: "blueprint_document_id" },
         { table_name: "blueprint_documents", column_name: "draft_rules_json" },
         { table_name: "blueprint_documents", column_name: "review_version" },
-        { table_name: "blueprint_ocr_pages", column_name: "blueprint_document_id" }
+        { table_name: "blueprint_ocr_pages", column_name: "blueprint_document_id" },
+        { table_name: "blueprint_ocr_blocks", column_name: "blueprint_ocr_page_id" },
+        { table_name: "blueprint_ocr_assets", column_name: "blueprint_ocr_page_id" }
       ]);
 
     await expect(checkDatabaseReady()).resolves.toBeUndefined();
@@ -103,7 +105,7 @@ describe("checkDatabaseReady", () => {
       .mockResolvedValueOnce([{ table_name: "provider_batch_jobs", column_name: "id" }]);
 
     await expect(checkDatabaseReady()).rejects.toThrow(
-      "Database schema is not migrated. Missing: workflow_runs.retry_of_workflow_run_id, workflow_runs.blueprint_document_id, blueprint_documents.draft_rules_json, blueprint_documents.review_version, blueprint_ocr_pages.blueprint_document_id. Run pnpm db:deploy."
+      "Database schema is not migrated. Missing: workflow_runs.retry_of_workflow_run_id, workflow_runs.blueprint_document_id, blueprint_documents.draft_rules_json, blueprint_documents.review_version, blueprint_ocr_pages.blueprint_document_id, blueprint_ocr_blocks.blueprint_ocr_page_id, blueprint_ocr_assets.blueprint_ocr_page_id. Run pnpm db:deploy."
     );
   });
 });

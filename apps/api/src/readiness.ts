@@ -59,6 +59,8 @@ export async function checkDatabaseReady() {
         OR (table_name = 'provider_batch_jobs' AND column_name = 'id')
         OR (table_name = 'blueprint_documents' AND column_name IN ('draft_rules_json', 'review_version'))
         OR (table_name = 'blueprint_ocr_pages' AND column_name = 'blueprint_document_id')
+        OR (table_name = 'blueprint_ocr_blocks' AND column_name = 'blueprint_ocr_page_id')
+        OR (table_name = 'blueprint_ocr_assets' AND column_name = 'blueprint_ocr_page_id')
       )
   `;
   const availableSchemaObjects = new Set(schemaObjects.map((schemaObject) => `${schemaObject.table_name}.${schemaObject.column_name}`));
@@ -116,5 +118,7 @@ const requiredDatabaseSchemaObjects = [
   "provider_batch_jobs.id",
   "blueprint_documents.draft_rules_json",
   "blueprint_documents.review_version",
-  "blueprint_ocr_pages.blueprint_document_id"
+  "blueprint_ocr_pages.blueprint_document_id",
+  "blueprint_ocr_blocks.blueprint_ocr_page_id",
+  "blueprint_ocr_assets.blueprint_ocr_page_id"
 ] as const;

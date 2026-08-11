@@ -182,7 +182,13 @@ describe("Blueprint workflow lifecycle activities", () => {
       model: "mistral-ocr-latest",
       usage: { pagesProcessed: 2 },
       pages: [
-        { pageNumber: 1, markdown: "# Section A", rawJson: { index: 0 } },
+        {
+          pageNumber: 1,
+          markdown: "# Section A",
+          rawJson: { index: 0 },
+          blocks: [{ blockType: "image", text: "page-1-image-1.png", confidence: 0.95, boundingBox: { x: 12 }, sourceAsset: { imageId: "image-1" }, rawJson: { type: "image" } }],
+          images: [{ id: "image-1", fileName: "page-1-image-1.png", mimeType: "image/png", base64: "unused", boundingBox: { x: 20 }, rawJson: { id: "image-1" } }]
+        },
         { pageNumber: 2, markdown: "# Section B", plainText: "Section B", averageConfidence: 0.92, rawJson: { index: 1 } }
       ]
     });
@@ -202,7 +208,26 @@ describe("Blueprint workflow lifecycle activities", () => {
     const firstOcrPageUpsert: unknown = mocks.prisma.blueprintOcrPage.upsert.mock.calls[0]?.[0];
     expect(firstOcrPageUpsert).toMatchObject({
       where: { blueprintDocumentId_pageNumber: { blueprintDocumentId: "blueprint-1", pageNumber: 1 } },
-      create: { markdownText: "# Section A", plainText: "Section A" }
+      create: {
+        markdownText: "# Section A",
+        plainText: "Section A",
+        ocrBlocks: {
+          create: [{ blockType: "image", text: "page-1-image-1.png", confidence: 0.95, boundingBox: { x: 12 }, sourceAsset: { imageId: "image-1" }, rawJson: { type: "image" } }]
+        },
+        ocrAssets: {
+          create: [{ sourceAssetId: "image-1", fileName: "page-1-image-1.png", mimeType: "image/png", boundingBox: { x: 20 }, rawJson: { id: "image-1" } }]
+        }
+      },
+      update: {
+        ocrBlocks: {
+          deleteMany: {},
+          create: [{ blockType: "image", text: "page-1-image-1.png", confidence: 0.95, boundingBox: { x: 12 }, sourceAsset: { imageId: "image-1" }, rawJson: { type: "image" } }]
+        },
+        ocrAssets: {
+          deleteMany: {},
+          create: [{ sourceAssetId: "image-1", fileName: "page-1-image-1.png", mimeType: "image/png", boundingBox: { x: 20 }, rawJson: { id: "image-1" } }]
+        }
+      }
     });
   });
 
