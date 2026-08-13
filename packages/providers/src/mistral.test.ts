@@ -577,7 +577,8 @@ describe("MistralBlueprintLanguageAnalyzer", () => {
       if (typeof body !== "string") {
         throw new Error("Expected Mistral request body to be serialized JSON.");
       }
-      fetchCalls.push(JSON.parse(body));
+      const request = parseMistralRequest(init);
+      fetchCalls.push(request);
       return Promise.resolve(
         new Response(
           JSON.stringify({
@@ -654,19 +655,19 @@ describe("MistralBlueprintRuleExtractor", () => {
       if (typeof body !== "string") {
         throw new Error("Expected Mistral request body to be serialized JSON.");
       }
-      fetchCalls.push(JSON.parse(body));
+      const request = parseMistralRequest(init);
+      fetchCalls.push(request);
+      const schemaName = responseSchemaName(request);
+      const content = schemaName === "blueprint_skeleton_extraction"
+        ? { result: { document_metadata: { title: null, subject: "Hindi", examination: null, paper_code: "2/8/2", session: null, total_marks: 10, source_pages: [1] }, evaluation_rules: [{ rule: "Answer all questions.", source_pages: [1] }], assessment_blueprint: { sections: [{ name: "Section A", question_range: "1", question_type: null, choice_rules: [], declared_marks: 10, source_pages: [1] }], total_marks: 10, source_pages: [1] }, question_index: [{ number: "1", section: "Section A", marks: 10, part_labels: [], alternative_labels: [], source_pages: [1] }] }, confidence: 0.91, source_references: [{ page_number: 1, language_tag: "hi", snippet: "सभी प्रश्नों" }], warnings: [] }
+        : { result: { question_marking_scheme: [{ number: "1", section: "Section A", marks: 10, parts: [], alternatives: [], value_points: [], acceptable_answers: [], marking_notes: [], source_pages: [1] }] }, confidence: 0.91, source_references: [{ page_number: 1, language_tag: "hi", snippet: "सभी प्रश्नों" }], warnings: [] };
       return Promise.resolve(
         new Response(
           JSON.stringify({
             choices: [
               {
                 message: {
-                  content: JSON.stringify({
-                    rules: { document_metadata: { title: null, subject: "Hindi", examination: null, paper_code: "2/8/2", session: null, total_marks: 10, source_pages: [1] }, evaluation_rules: [{ rule: "सभी प्रश्नों के उत्तर दीजिए", source_pages: [1] }], assessment_blueprint: { sections: [{ name: "खंड अ", question_range: "1", question_type: null, choice_rules: [], declared_marks: 10, source_pages: [1] }], total_marks: 10, source_pages: [1] }, question_marking_scheme: [{ number: "1", section: "खंड अ", marks: 10, parts: [], alternatives: [], value_points: [], acceptable_answers: [], marking_notes: [], source_pages: [1] }] },
-                    confidence: 0.91,
-                    source_references: [{ page_number: 1, language_tag: "hi", snippet: "सभी प्रश्नों" }],
-                    warnings: []
-                  })
+                  content: JSON.stringify(content)
                 }
               }
             ],
@@ -697,21 +698,102 @@ describe("MistralBlueprintRuleExtractor", () => {
       globalThis.fetch = originalFetch;
     }
 
-    const request = asRecord(fetchCalls[0]);
-    expect(request.response_format).toMatchObject({
+    expect(fetchCalls).toHaveLength(2);
+    const skeletonRequest = asRecord(fetchCalls[0]);
+    const questionRequest = asRecord(fetchCalls[1]);
+    expect(skeletonRequest.response_format).toMatchObject({
       type: "json_schema",
       json_schema: {
-        name: "blueprint_extraction",
+        name: "blueprint_skeleton_extraction",
         strict: true,
-        schema: { required: ["rules", "confidence", "source_references", "warnings"] }
+        schema: { required: ["result", "confidence", "source_references", "warnings"] }
       }
     });
-    const messages = request.messages as Array<{ role: string; content: string }>;
+    expect(questionRequest.response_format).toMatchObject({ json_schema: { name: "question_scheme_extraction", strict: true } });
+    const messages = skeletonRequest.messages as Array<{ role: string; content: string }>;
     expect(messages[0]?.content).toContain("marking scheme");
     expect(messages[1]?.content).toContain("Designated primary language: hi");
     expect(messages[1]?.content).toContain("Layout blocks:");
     expect(messages[1]?.content).toContain("source_asset={\"imageId\":\"diagram-1\"}");
     expect(messages[1]?.content).toContain("id=diagram-1; file=diagram-1.png; mime_type=image/png");
+    const questionMessages = questionRequest.messages as Array<{ role: string; content: string }>;
+    expect(questionMessages[1]?.content).toContain("Consolidated structural skeleton (guide only):");
+  });
+
+  it("extracts skeletons before question schemes when marking pages span chunks", async () => {
+    const fetchCalls: Array<Record<string, unknown>> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (_input, init) => {
+      const request = parseMistralRequest(init);
+      fetchCalls.push(request);
+      const skeleton = responseSchemaName(request) === "blueprint_skeleton_extraction";
+      const content = skeleton
+        ? { result: { document_metadata: { title: null, subject: null, examination: null, paper_code: null, session: null, total_marks: null, source_pages: [1] }, evaluation_rules: [], assessment_blueprint: { sections: [], total_marks: null, source_pages: [1] }, question_index: [{ number: "1", section: null, marks: null, part_labels: [], alternative_labels: [], source_pages: [1] }] }, confidence: 0.8, source_references: [{ page_number: 1 }], warnings: [] }
+        : { result: { question_marking_scheme: [{ number: "1", section: null, marks: null, parts: [], alternatives: [], value_points: [], acceptable_answers: [], marking_notes: [], source_pages: [1] }] }, confidence: 0.9, source_references: [{ page_number: 1 }], warnings: [] };
+      return Promise.resolve(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    };
+
+    try {
+      const result = await new MistralBlueprintRuleExtractor(testMistralConfig).extractRules({
+        primaryLanguage: "en",
+        pages: Array.from({ length: 7 }, (_, index) => ({ pageNumber: index + 1, markdown: `Page ${index + 1}` }))
+      });
+      expect(result.usage).toEqual({ promptTokens: 40, completionTokens: 20, totalTokens: 60 });
+      expect(result.rawJson).toMatchObject({ skeletonPasses: [expect.anything(), expect.anything()], questionSchemePasses: [expect.anything(), expect.anything()] });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(fetchCalls.map(responseSchemaName)).toEqual([
+      "blueprint_skeleton_extraction", "blueprint_skeleton_extraction", "question_scheme_extraction", "question_scheme_extraction"
+    ]);
+    expect(String((fetchCalls[3]?.messages as Array<{ content: string }>)[1]?.content)).toContain("Page 7");
+  });
+
+  it("retries one numeric gap with affected and adjacent marking pages, then re-audits", async () => {
+    const fetchCalls: Array<Record<string, unknown>> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (_input, init) => {
+      const request = parseMistralRequest(init);
+      fetchCalls.push(request);
+      const schemaName = responseSchemaName(request);
+      const content = schemaName === "blueprint_skeleton_extraction"
+        ? {
+          result: {
+            document_metadata: { title: null, subject: "Math", examination: null, paper_code: null, session: null, total_marks: 15, source_pages: [1] },
+            evaluation_rules: [],
+            assessment_blueprint: { sections: [{ name: "Section A", question_range: "1-3", question_type: null, choice_rules: [], declared_marks: 15, source_pages: [1] }], total_marks: 15, source_pages: [1] },
+            question_index: [1, 2, 3].map((number) => ({ number: String(number), section: "Section A", marks: 5, part_labels: [], alternative_labels: [], source_pages: [number] }))
+          }, confidence: 0.9, source_references: [{ page_number: 1 }], warnings: []
+        }
+        : schemaName === "question_scheme_recovery"
+          ? { result: { question_marking_scheme: [{ number: "2", section: "Section A", marks: 5, parts: [], alternatives: [], value_points: ["Recovered evidence"], acceptable_answers: [], marking_notes: [], source_pages: [2] }] }, confidence: 0.8, source_references: [{ page_number: 2 }], warnings: [] }
+          : { result: { question_marking_scheme: [1, 3].map((number) => ({ number: String(number), section: "Section A", marks: 5, parts: [], alternatives: [], value_points: [], acceptable_answers: [], marking_notes: [], source_pages: [number] })) }, confidence: 0.85, source_references: [{ page_number: 1 }, { page_number: 3 }], warnings: [] };
+      return Promise.resolve(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    };
+
+    try {
+      const result = await new MistralBlueprintRuleExtractor(testMistralConfig).extractRules({
+        primaryLanguage: "en",
+        pages: [1, 2, 3].map((pageNumber) => ({ pageNumber, markdown: `Question ${pageNumber}` })),
+        markingSchemePageNumbers: [1, 2, 3]
+      });
+      expect(result.rules).toMatchObject({ question_marking_scheme: [{ number: "1" }, { number: "2" }, { number: "3" }] });
+      expect(result.audit).toMatchObject({ reconciled: true, missingQuestionNumbers: [], markReconciliation: { status: "MATCH" } });
+      expect(result.recovery).toEqual({ attempted: true, requestedQuestionNumbers: ["2"], pageNumbers: [1, 2, 3], recoveredQuestionNumbers: ["2"] });
+      expect(result.usage).toEqual({ promptTokens: 30, completionTokens: 15, totalTokens: 45 });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(fetchCalls.map(responseSchemaName)).toEqual([
+      "blueprint_skeleton_extraction", "question_scheme_extraction", "question_scheme_recovery"
+    ]);
+    const recoveryPrompt = messageContent(fetchCalls[2], 1);
+    expect(recoveryPrompt).toContain("Missing question numbers to recover: 2");
+    expect(recoveryPrompt).toContain("Page 1");
+    expect(recoveryPrompt).toContain("Page 2");
+    expect(recoveryPrompt).toContain("Page 3");
   });
 });
 
@@ -806,4 +888,24 @@ function asRecord(value: unknown) {
   }
 
   return value as Record<string, unknown>;
+}
+
+function parseMistralRequest(init: RequestInit | undefined) {
+  const body = init?.body;
+  if (typeof body !== "string") throw new Error("Expected Mistral request body to be serialized JSON.");
+  return asRecord(JSON.parse(body) as unknown);
+}
+
+function responseSchemaName(request: Record<string, unknown>) {
+  const responseFormat = asRecord(request.response_format);
+  const jsonSchema = asRecord(responseFormat.json_schema);
+  if (typeof jsonSchema.name !== "string") throw new Error("Expected a response schema name.");
+  return jsonSchema.name;
+}
+
+function messageContent(request: Record<string, unknown> | undefined, index: number) {
+  if (!request || !Array.isArray(request.messages)) throw new Error("Expected Mistral request messages.");
+  const message = asRecord(request.messages[index]);
+  if (typeof message.content !== "string") throw new Error("Expected Mistral message content.");
+  return message.content;
 }

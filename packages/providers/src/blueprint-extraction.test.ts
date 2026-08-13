@@ -7,6 +7,8 @@ import {
   blueprintSkeletonExtractionJsonSchema,
   blueprintSkeletonExtractionResponseSchema,
   blueprintSkeletonExtractionSystemPrompt,
+  consolidateBlueprintSkeletons,
+  mergeQuestionSchemesWithEvidence,
   questionSchemeExtractionJsonSchema,
   questionSchemeExtractionResponseSchema,
   questionSchemeExtractionSystemPrompt,
@@ -39,6 +41,25 @@ describe("two-pass Blueprint extraction contracts", () => {
       expect(prompt).toContain("strictly in English");
       expect(prompt).toContain("source_pages");
     }
+  });
+
+  it("consolidates structural evidence and merges duplicate questions without losing source pages", () => {
+    const skeleton = (sourcePage: number, marks: number) => ({
+      document_metadata: { title: "Marking scheme", subject: null, examination: null, paper_code: null, session: null, total_marks: 10, source_pages: [sourcePage] },
+      evaluation_rules: [{ rule: "Answer all questions.", source_pages: [sourcePage] }],
+      assessment_blueprint: { sections: [{ name: "Section A", question_range: "1", question_type: null, choice_rules: [], declared_marks: 10, source_pages: [sourcePage] }], total_marks: 10, source_pages: [sourcePage] },
+      question_index: [{ number: "1", section: "Section A", marks, part_labels: [], alternative_labels: [], source_pages: [sourcePage] }]
+    });
+    const consolidated = consolidateBlueprintSkeletons([skeleton(1, 5), skeleton(2, 6)]);
+    expect(consolidated.skeleton.question_index[0]?.source_pages).toEqual([1, 2]);
+    expect(consolidated.warnings).toContain("Conflicting skeleton question evidence for 1; retained the earliest declaration.");
+
+    const merged = mergeQuestionSchemesWithEvidence([
+      { question_marking_scheme: [{ number: "1", section: "Section A", marks: 5, parts: [], alternatives: [], value_points: ["Method"], acceptable_answers: [], marking_notes: [], source_pages: [1] }] },
+      { question_marking_scheme: [{ number: "1", section: "Section B", marks: 6, parts: [], alternatives: [], value_points: ["Method", "Answer"], acceptable_answers: ["Equivalent form"], marking_notes: [], source_pages: [2] }] }
+    ]);
+    expect(merged.questionMarkingScheme[0]).toMatchObject({ source_pages: [1, 2], value_points: ["Method", "Answer"], acceptable_answers: ["Equivalent form"], section: "Section A", marks: 5 });
+    expect(merged.warnings).toContain("Conflicting evidence for question 1 marks; retained the earliest value.");
   });
 
   it("validates strict skeleton and detailed question-scheme responses independently", () => {

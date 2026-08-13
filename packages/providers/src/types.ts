@@ -120,6 +120,44 @@ export interface BlueprintSourceReferenceResult {
   confidence?: number | null | undefined;
 }
 
+export interface BlueprintExtractionAuditConflict {
+  questionNumber: string;
+  field: "marks" | "section";
+  values: Array<string | number>;
+  sourcePages: number[];
+}
+
+export interface BlueprintUnparseableQuestionRange {
+  sectionName: string;
+  questionRange: string;
+  sourcePages: number[];
+}
+
+export interface BlueprintMarkReconciliation {
+  status: "MATCH" | "MISMATCH" | "UNAVAILABLE";
+  declaredTotalMarks: number | null;
+  extractedTotalMarks: number | null;
+  choiceAdjustedSections: string[];
+}
+
+export interface BlueprintExtractionAudit {
+  reconciled: boolean;
+  expectedQuestionNumbers: string[];
+  extractedQuestionNumbers: string[];
+  missingQuestionNumbers: string[];
+  duplicateQuestionNumbers: string[];
+  conflicts: BlueprintExtractionAuditConflict[];
+  markReconciliation: BlueprintMarkReconciliation;
+  unparseableRanges: BlueprintUnparseableQuestionRange[];
+}
+
+export interface BlueprintExtractionRecovery {
+  attempted: boolean;
+  requestedQuestionNumbers: string[];
+  pageNumbers: number[];
+  recoveredQuestionNumbers: string[];
+}
+
 export interface BlueprintExtractionResult {
   provider: "mistral";
   model: string;
@@ -128,6 +166,8 @@ export interface BlueprintExtractionResult {
   sourceReferences: BlueprintSourceReferenceResult[];
   warnings: string[];
   rawJson: unknown;
+  audit?: BlueprintExtractionAudit | undefined;
+  recovery?: BlueprintExtractionRecovery | undefined;
   usage: {
     promptTokens?: number | undefined;
     completionTokens?: number | undefined;
