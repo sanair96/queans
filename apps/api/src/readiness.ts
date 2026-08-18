@@ -55,8 +55,12 @@ export async function checkDatabaseReady() {
     FROM information_schema.columns
     WHERE table_schema = 'public'
       AND (
-        (table_name = 'workflow_runs' AND column_name = 'retry_of_workflow_run_id')
+        (table_name = 'workflow_runs' AND column_name IN ('retry_of_workflow_run_id', 'blueprint_document_id'))
         OR (table_name = 'provider_batch_jobs' AND column_name = 'id')
+        OR (table_name = 'blueprint_documents' AND column_name IN ('draft_rules_json', 'review_version'))
+        OR (table_name = 'blueprint_ocr_pages' AND column_name = 'blueprint_document_id')
+        OR (table_name = 'blueprint_ocr_blocks' AND column_name = 'blueprint_ocr_page_id')
+        OR (table_name = 'blueprint_ocr_assets' AND column_name = 'blueprint_ocr_page_id')
       )
   `;
   const availableSchemaObjects = new Set(schemaObjects.map((schemaObject) => `${schemaObject.table_name}.${schemaObject.column_name}`));
@@ -108,4 +112,13 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
   }
 }
 
-const requiredDatabaseSchemaObjects = ["workflow_runs.retry_of_workflow_run_id", "provider_batch_jobs.id"] as const;
+const requiredDatabaseSchemaObjects = [
+  "workflow_runs.retry_of_workflow_run_id",
+  "workflow_runs.blueprint_document_id",
+  "provider_batch_jobs.id",
+  "blueprint_documents.draft_rules_json",
+  "blueprint_documents.review_version",
+  "blueprint_ocr_pages.blueprint_document_id",
+  "blueprint_ocr_blocks.blueprint_ocr_page_id",
+  "blueprint_ocr_assets.blueprint_ocr_page_id"
+] as const;

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { MistralBatchProvider, parseMistralExtractionContent, parseMistralOcrResult } from "./mistral.js";
+import {
+  MistralBatchProvider,
+  MistralBlueprintLanguageAnalyzer,
+  MistralBlueprintRuleExtractor,
+  parseMistralExtractionContent,
+  parseMistralOcrResult
+} from "./mistral.js";
 
 const baseCandidate = {
   raw_ocr_text: "1. What is photosynthesis?",
@@ -562,6 +568,224 @@ describe("MistralQuestionExtractor", () => {
   });
 });
 
+describe("MistralBlueprintLanguageAnalyzer", () => {
+  it("requests generic multilingual analysis with page-level language evidence", async () => {
+    const fetchCalls: unknown[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (_input, init) => {
+      const body = init?.body;
+      if (typeof body !== "string") {
+        throw new Error("Expected Mistral request body to be serialized JSON.");
+      }
+      const request = parseMistralRequest(init);
+      fetchCalls.push(request);
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    detected_languages: [
+                      { tag: "en", confidence: 0.99, page_numbers: [1] },
+                      { tag: "hi", confidence: 0.99, page_numbers: [2] }
+                    ],
+                    primary_language: { tag: "hi", confidence: 0.96 },
+                    mixed_language_page_numbers: [],
+                    multilingual_relationship: "DUPLICATE_TRANSLATIONS",
+                    page_languages: [
+                      { page_number: 1, languages: [{ tag: "en", confidence: 0.99 }] },
+                      { page_number: 2, languages: [{ tag: "hi", confidence: 0.99 }] }
+                    ],
+                    document_analysis: {
+                      document_type: "MARKING_SCHEME",
+                      is_marking_scheme: true,
+                      confidence: 0.98,
+                      title_language_tag: "hi",
+                      header_language_tag: "hi",
+                      evidence_page_numbers: [1, 2],
+                      evaluator_instruction_page_numbers: [1],
+                      marking_scheme_page_numbers: [2],
+                      paper_code: "3/8/1"
+                    }
+                  })
+                }
+              }
+            ],
+            usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 }
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+    };
+
+    try {
+      const analyzer = new MistralBlueprintLanguageAnalyzer(testMistralConfig);
+      const result = await analyzer.analyzePages({
+        pages: [
+          { pageNumber: 1, markdown: "# Question Paper" },
+          { pageNumber: 2, markdown: "# प्रश्न पत्र" }
+        ]
+      });
+      expect(result).toMatchObject({
+        primaryLanguage: { tag: "hi", confidence: 0.96 },
+        multilingualRelationship: "DUPLICATE_TRANSLATIONS"
+      });
+      expect(result.pageLanguages[0]).toMatchObject({ pageNumber: 1, languages: [{ tag: "en" }] });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const request = asRecord(fetchCalls[0]);
+    expect(request.response_format).toMatchObject({
+      type: "json_schema",
+      json_schema: { name: "blueprint_language_analysis", strict: true }
+    });
+    const messages = request.messages as Array<{ role: string; content: string }>;
+    expect(messages[0]?.content).toContain("every language present");
+    expect(messages[1]?.content).toContain("Page 2:\n# प्रश्न पत्र");
+  });
+});
+
+describe("MistralBlueprintRuleExtractor", () => {
+  it("extracts only structural Blueprint fields with strict JSON and source references", async () => {
+    const fetchCalls: unknown[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (_input, init) => {
+      const body = init?.body;
+      if (typeof body !== "string") {
+        throw new Error("Expected Mistral request body to be serialized JSON.");
+      }
+      const request = parseMistralRequest(init);
+      fetchCalls.push(request);
+      const content = {
+        result: { document_metadata: { title: null, subject: "Hindi", examination: null, paper_code: "2/8/2", session: null, total_marks: 10, source_pages: [1] }, evaluation_rules: [{ rule: "Answer all questions.", source_pages: [1] }], assessment_blueprint: { sections: [{ name: "Section A", printed_identifier: null, question_range: "1", question_type: "Short answer", choice_rules: [], declared_marks: 10, source_pages: [1] }], total_marks: 10, source_pages: [1] }, question_index: [{ number: "1", section: "Section A", marks: 10, question_type: "Short answer", part_labels: [], alternative_labels: [], source_pages: [1] }] }, confidence: 0.91, source_references: [{ page_number: 1, language_tag: "hi", snippet: "प्रश्न 1" }], warnings: []
+      };
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify(content)
+                }
+              }
+            ],
+            usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 }
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+    };
+
+    try {
+      const extractor = new MistralBlueprintRuleExtractor(testMistralConfig);
+      await expect(
+        extractor.extractRules({
+          primaryLanguage: "hi",
+          pages: [{
+            pageNumber: 1,
+            markdown: "# खंड अ\nसभी प्रश्नों",
+            blocks: [{ blockType: "table", text: "1. पांच अंक", confidence: 0.9, boundingBox: { x: 10 }, sourceAsset: { imageId: "diagram-1" } }],
+            assets: [{ sourceAssetId: "diagram-1", fileName: "diagram-1.png", mimeType: "image/png", boundingBox: { x: 20 }, metadata: { provider: "mistral" } }]
+          }]
+        })
+      ).resolves.toMatchObject({
+        rules: { document_metadata: { paper_code: "2/8/2" }, question_index: [{ number: "1", marks: 10 }] },
+        sourceReferences: [{ pageNumber: 1, languageTag: "hi" }]
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(fetchCalls).toHaveLength(1);
+    const skeletonRequest = asRecord(fetchCalls[0]);
+    expect(skeletonRequest.response_format).toMatchObject({
+      type: "json_schema",
+      json_schema: {
+        name: "blueprint_skeleton_extraction",
+        strict: true,
+        schema: { required: ["result", "confidence", "source_references", "warnings"] }
+      }
+    });
+    const messages = skeletonRequest.messages as Array<{ role: string; content: string }>;
+    expect(messages[0]?.content).toContain("structural Blueprint");
+    expect(messages[1]?.content).toContain("Detected primary language: hi");
+    expect(messages[1]?.content).toContain("Layout blocks:");
+    expect(messages[1]?.content).toContain("source_asset={\"imageId\":\"diagram-1\"}");
+    expect(messages[1]?.content).toContain("id=diagram-1; file=diagram-1.png; mime_type=image/png");
+    expect(messages[0]?.content).toContain("Never return question text");
+  });
+
+  it("uses overlapping structural chunks when pages span boundaries", async () => {
+    const fetchCalls: Array<Record<string, unknown>> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (_input, init) => {
+      const request = parseMistralRequest(init);
+      fetchCalls.push(request);
+      const content = { result: { document_metadata: { title: null, subject: null, examination: null, paper_code: null, session: null, total_marks: null, source_pages: [1] }, evaluation_rules: [], assessment_blueprint: { sections: [], total_marks: null, source_pages: [1] }, question_index: [{ number: "1", section: null, marks: null, question_type: null, part_labels: [], alternative_labels: [], source_pages: [1] }] }, confidence: 0.8, source_references: [{ page_number: 1 }], warnings: [] };
+      return Promise.resolve(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    };
+
+    try {
+      const result = await new MistralBlueprintRuleExtractor(testMistralConfig).extractRules({
+        primaryLanguage: "en",
+        pages: Array.from({ length: 7 }, (_, index) => ({ pageNumber: index + 1, markdown: `Page ${index + 1}` }))
+      });
+      expect(result.usage).toEqual({ promptTokens: 20, completionTokens: 10, totalTokens: 30 });
+      expect(result.rawJson).toMatchObject({ skeletonPasses: [expect.anything(), expect.anything()] });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(fetchCalls.map(responseSchemaName)).toEqual(["blueprint_skeleton_extraction", "blueprint_skeleton_extraction"]);
+    expect(String((fetchCalls[1]?.messages as Array<{ content: string }>)[1]?.content)).toContain("Page 7");
+  });
+
+  it("retries one numeric gap with affected and adjacent marking pages, then re-audits", async () => {
+    const fetchCalls: Array<Record<string, unknown>> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (_input, init) => {
+      const request = parseMistralRequest(init);
+      fetchCalls.push(request);
+      const schemaName = responseSchemaName(request);
+      const content = schemaName === "blueprint_skeleton_extraction"
+        ? {
+          result: {
+            document_metadata: { title: null, subject: "Math", examination: null, paper_code: null, session: null, total_marks: 15, source_pages: [1] },
+            evaluation_rules: [],
+            assessment_blueprint: { sections: [{ name: "Section A", printed_identifier: null, question_range: "1-3", question_type: null, choice_rules: [], declared_marks: 15, source_pages: [1] }], total_marks: 15, source_pages: [1] },
+            question_index: [1, 3].map((number) => ({ number: String(number), section: "Section A", marks: 5, question_type: "Short answer", part_labels: [], alternative_labels: [], source_pages: [number] }))
+          }, confidence: 0.9, source_references: [{ page_number: 1 }], warnings: []
+        }
+        : { result: { question_index: [{ number: "2", section: "Section A", marks: 5, question_type: "Short answer", part_labels: [], alternative_labels: [], source_pages: [2] }] }, confidence: 0.8, source_references: [{ page_number: 2 }], warnings: [] };
+      return Promise.resolve(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    };
+
+    try {
+      const result = await new MistralBlueprintRuleExtractor(testMistralConfig).extractRules({
+        primaryLanguage: "en",
+        pages: [1, 2, 3].map((pageNumber) => ({ pageNumber, markdown: `Question ${pageNumber}` })),
+      });
+      expect(result.rules).toMatchObject({ question_index: [{ number: "1" }, { number: "2" }, { number: "3" }] });
+      expect(result.audit).toMatchObject({ reconciled: true, missingQuestionNumbers: [], markReconciliation: { status: "MATCH" } });
+      expect(result.recovery).toEqual({ attempted: true, requestedQuestionNumbers: ["2"], pageNumbers: [1, 2, 3], recoveredQuestionNumbers: ["2"] });
+      expect(result.usage).toEqual({ promptTokens: 20, completionTokens: 10, totalTokens: 30 });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(fetchCalls.map(responseSchemaName)).toEqual([
+      "blueprint_skeleton_extraction", "blueprint_structural_recovery"
+    ]);
+    const recoveryPrompt = messageContent(fetchCalls[1], 1);
+    expect(recoveryPrompt).toContain("Recover only these missing structural question numbers: 2");
+    expect(recoveryPrompt).toContain("Page 1");
+    expect(recoveryPrompt).toContain("Page 2");
+    expect(recoveryPrompt).toContain("Page 3");
+  });
+});
+
 describe("MistralBatchProvider", () => {
   it("builds OCR batch lines with image and confidence extraction enabled", () => {
     const provider = new MistralBatchProvider(testMistralConfig);
@@ -653,4 +877,24 @@ function asRecord(value: unknown) {
   }
 
   return value as Record<string, unknown>;
+}
+
+function parseMistralRequest(init: RequestInit | undefined) {
+  const body = init?.body;
+  if (typeof body !== "string") throw new Error("Expected Mistral request body to be serialized JSON.");
+  return asRecord(JSON.parse(body) as unknown);
+}
+
+function responseSchemaName(request: Record<string, unknown>) {
+  const responseFormat = asRecord(request.response_format);
+  const jsonSchema = asRecord(responseFormat.json_schema);
+  if (typeof jsonSchema.name !== "string") throw new Error("Expected a response schema name.");
+  return jsonSchema.name;
+}
+
+function messageContent(request: Record<string, unknown> | undefined, index: number) {
+  if (!request || !Array.isArray(request.messages)) throw new Error("Expected Mistral request messages.");
+  const message = asRecord(request.messages[index]);
+  if (typeof message.content !== "string") throw new Error("Expected Mistral message content.");
+  return message.content;
 }

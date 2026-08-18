@@ -2,8 +2,8 @@ import { prisma, WorkflowType } from "@queans/db";
 import type { Prisma } from "@queans/db";
 
 import type { ApiConfig } from "./config.js";
-import { startPaperIngestionWorkflow } from "./temporal.js";
-import type { StartedPaperIngestionWorkflow } from "./temporal.js";
+import { startBlueprintIngestionWorkflow, startPaperIngestionWorkflow } from "./temporal.js";
+import type { StartedBlueprintIngestionWorkflow, StartedPaperIngestionWorkflow } from "./temporal.js";
 
 type RetryImportOperation = "ocr" | "question_segmentation" | "question_solving";
 
@@ -28,6 +28,16 @@ export function retryableWorkflowStartOutboxWhere(
       }
     ]
   };
+}
+
+export function dispatchableWorkflowStartOutboxWhere(
+  maxAttempts = WORKFLOW_DISPATCH_MAX_ATTEMPTS,
+  staleBefore = workflowDispatchStaleBefore()
+) {
+  return {
+    ...retryableWorkflowStartOutboxWhere(maxAttempts, staleBefore),
+    workflowRun: { workflowType: { in: [WorkflowType.PAPER_INGESTION, WorkflowType.BLUEPRINT_INGESTION] } }
+  } satisfies Prisma.WorkflowStartOutboxWhereInput;
 }
 
 export function workflowDispatchStaleBefore(now = new Date()) {
@@ -70,6 +80,12 @@ export function workflowDispatchSuccessRunUpdate(startedWorkflow: StartedPaperIn
   } satisfies Prisma.WorkflowRunUpdateInput;
 }
 
+export function workflowDispatchSuccessBlueprintRunUpdate(startedWorkflow: StartedBlueprintIngestionWorkflow) {
+  return {
+    temporalRunId: startedWorkflow.temporalRunId
+  } satisfies Prisma.WorkflowRunUpdateInput;
+}
+
 export function workflowStartedEventPayload(startedWorkflow: StartedPaperIngestionWorkflow) {
   return {
     temporalWorkflowId: startedWorkflow.workflowId,
@@ -94,7 +110,7 @@ export function workflowDispatchSuccessOutboxUpdate() {
 export async function dispatchPendingWorkflowStarts(config: ApiConfig, limit = 10, maxAttempts = WORKFLOW_DISPATCH_MAX_ATTEMPTS) {
   const staleBefore = workflowDispatchStaleBefore();
   const pending = await prisma.workflowStartOutbox.findMany({
-    where: retryableWorkflowStartOutboxWhere(maxAttempts, staleBefore),
+    where: dispatchableWorkflowStartOutboxWhere(maxAttempts, staleBefore),
     include: { workflowRun: true },
     orderBy: { createdAt: "asc" },
     take: limit
@@ -110,37 +126,55 @@ export async function dispatchPendingWorkflowStarts(config: ApiConfig, limit = 1
     }
 
     try {
-      if (item.workflowRun.workflowType !== WorkflowType.PAPER_INGESTION || !item.workflowRun.sourcePaperId) {
+      if (item.workflowRun.workflowType === WorkflowType.PAPER_INGESTION && item.workflowRun.sourcePaperId) {
+        const startedWorkflow = await startPaperIngestionWorkflow(config, {
+          ingestionRunId: item.workflowRunId,
+          sourcePaperId: item.workflowRun.sourcePaperId,
+          ...retryImportInputFromPayload(item.workflowRun.inputPayload)
+        });
+        await prisma.$transaction([
+          prisma.workflowRun.update({
+            where: { id: item.workflowRunId },
+            data: workflowDispatchSuccessRunUpdate(startedWorkflow)
+          }),
+          prisma.sourcePaper.update({
+            where: { id: item.workflowRun.sourcePaperId },
+            data: workflowDispatchSuccessSourcePaperUpdate()
+          }),
+          prisma.workflowStartOutbox.update({
+            where: { id: item.id },
+            data: workflowDispatchSuccessOutboxUpdate()
+          }),
+          prisma.workflowEvent.create({
+            data: {
+              workflowRunId: item.workflowRunId,
+              eventType: "WORKFLOW_STARTED",
+              eventPayload: workflowStartedEventPayload(startedWorkflow)
+            }
+          })
+        ]);
+      } else if (item.workflowRun.workflowType === WorkflowType.BLUEPRINT_INGESTION && item.workflowRun.blueprintDocumentId) {
+        const startedWorkflow = await startBlueprintIngestionWorkflow(config, blueprintInputFromPayload(item.workflowRun.inputPayload));
+        await prisma.$transaction([
+          prisma.workflowRun.update({
+            where: { id: item.workflowRunId },
+            data: workflowDispatchSuccessBlueprintRunUpdate(startedWorkflow)
+          }),
+          prisma.workflowStartOutbox.update({
+            where: { id: item.id },
+            data: workflowDispatchSuccessOutboxUpdate()
+          }),
+          prisma.workflowEvent.create({
+            data: {
+              workflowRunId: item.workflowRunId,
+              eventType: "WORKFLOW_STARTED",
+              eventPayload: workflowStartedEventPayload(startedWorkflow)
+            }
+          })
+        ]);
+      } else {
         throw new Error(`Unsupported workflow outbox item ${item.id}`);
       }
-
-      const startedWorkflow = await startPaperIngestionWorkflow(config, {
-        ingestionRunId: item.workflowRunId,
-        sourcePaperId: item.workflowRun.sourcePaperId,
-        ...retryImportInputFromPayload(item.workflowRun.inputPayload)
-      });
-
-      await prisma.$transaction([
-        prisma.workflowRun.update({
-          where: { id: item.workflowRunId },
-          data: workflowDispatchSuccessRunUpdate(startedWorkflow)
-        }),
-        prisma.sourcePaper.update({
-          where: { id: item.workflowRun.sourcePaperId },
-          data: workflowDispatchSuccessSourcePaperUpdate()
-        }),
-        prisma.workflowStartOutbox.update({
-          where: { id: item.id },
-          data: workflowDispatchSuccessOutboxUpdate()
-        }),
-        prisma.workflowEvent.create({
-          data: {
-            workflowRunId: item.workflowRunId,
-            eventType: "WORKFLOW_STARTED",
-            eventPayload: workflowStartedEventPayload(startedWorkflow)
-          }
-        })
-      ]);
     } catch (error) {
       await prisma.workflowStartOutbox.update({
         where: { id: item.id },
@@ -148,6 +182,25 @@ export async function dispatchPendingWorkflowStarts(config: ApiConfig, limit = 1
       });
     }
   }
+}
+
+function blueprintInputFromPayload(value: Prisma.JsonValue) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Blueprint workflow input is invalid.");
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.workflowRunId !== "string" ||
+    typeof record.blueprintDocumentId !== "string" ||
+    (record.mode !== "FULL" && record.mode !== "RESUME_FROM_OCR")
+  ) {
+    throw new Error("Blueprint workflow input is invalid.");
+  }
+  return {
+    workflowRunId: record.workflowRunId,
+    blueprintDocumentId: record.blueprintDocumentId,
+    mode: record.mode
+  } as const;
 }
 
 function retryImportInputFromPayload(value: Prisma.JsonValue): {

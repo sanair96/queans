@@ -6,13 +6,24 @@ import {
   WorkflowIdReusePolicy
 } from "@temporalio/client";
 
-import { paperIngestionWorkflowId, PAPER_INGESTION_WORKFLOW_TYPE } from "@queans/core";
+import {
+  blueprintIngestionWorkflowId,
+  BLUEPRINT_INGESTION_WORKFLOW_TYPE,
+  paperIngestionWorkflowId,
+  PAPER_INGESTION_WORKFLOW_TYPE,
+  type BlueprintIngestionWorkflowInput
+} from "@queans/core";
 
 import type { ApiConfig } from "./config.js";
 
 let temporalClient: Client | undefined;
 
 export interface StartedPaperIngestionWorkflow {
+  workflowId: string;
+  temporalRunId: string;
+}
+
+export interface StartedBlueprintIngestionWorkflow {
   workflowId: string;
   temporalRunId: string;
 }
@@ -69,6 +80,31 @@ export async function startPaperIngestionWorkflow(
         workflowId,
         temporalRunId: description.runId
       };
+    }
+    throw error;
+  }
+}
+
+export async function startBlueprintIngestionWorkflow(
+  config: ApiConfig,
+  input: BlueprintIngestionWorkflowInput
+): Promise<StartedBlueprintIngestionWorkflow> {
+  const client = await getTemporalClient(config);
+  const workflowId = blueprintIngestionWorkflowId(input.workflowRunId);
+  try {
+    const handle = await client.workflow.start(BLUEPRINT_INGESTION_WORKFLOW_TYPE, {
+      taskQueue: config.TEMPORAL_TASK_QUEUE_BLUEPRINT_INGESTION,
+      workflowId,
+      workflowIdConflictPolicy: WorkflowIdConflictPolicy.USE_EXISTING,
+      workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
+      args: [input]
+    });
+    return { workflowId, temporalRunId: handle.firstExecutionRunId };
+  } catch (error) {
+    if (error instanceof WorkflowExecutionAlreadyStartedError) {
+      const existingWorkflow = client.workflow.getHandle(workflowId);
+      const description = await existingWorkflow.describe();
+      return { workflowId, temporalRunId: description.runId };
     }
     throw error;
   }

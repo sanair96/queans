@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  dispatchableWorkflowStartOutboxWhere,
   retryableWorkflowStartOutboxWhere,
   workflowDispatchClaimUpdate,
   workflowDispatchClaimWhere,
@@ -13,6 +14,14 @@ import {
 } from "./outbox.js";
 
 describe("workflow start outbox helpers", () => {
+  it("dispatches paper and Blueprint workflow starts", () => {
+    const staleBefore = new Date("2026-07-02T10:00:00.000Z");
+
+    expect(dispatchableWorkflowStartOutboxWhere(3, staleBefore)).toMatchObject({
+      workflowRun: { workflowType: { in: ["PAPER_INGESTION", "BLUEPRINT_INGESTION"] } }
+    });
+  });
+
   it("selects pending rows and failed rows below the retry cap", () => {
     const staleBefore = new Date("2026-07-02T10:00:00.000Z");
 

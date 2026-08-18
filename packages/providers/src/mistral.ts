@@ -1,6 +1,26 @@
 import { z } from "zod";
 
+import {
+  BlueprintExtractionResponseError,
+  blueprintSkeletonExtractionJsonSchema,
+  blueprintSkeletonExtractionSystemPrompt,
+  blueprintSkeletonExtractionUserPrompt,
+  blueprintSkeletonRecoveryJsonSchema,
+  blueprintSkeletonRecoveryUserPrompt,
+  consolidateBlueprintSkeletons,
+  parseBlueprintSkeletonExtractionResult,
+  parseBlueprintSkeletonRecoveryResult,
+} from "./blueprint-extraction-contract.js";
+import {
+  auditBlueprintExtraction,
+  blueprintExtractionAuditWarnings,
+  buildBlueprintRecoveryPlan,
+  extractBlueprintQuestionInventory
+} from "./blueprint-extraction-audit.js";
+import type { BlueprintStructuredOcrPage } from "./types.js";
 import type {
+  BlueprintExtractionResult,
+  BlueprintLanguageAnalysisResult,
   ExtractedQuestionCandidate,
   OcrImage,
   OcrPage,
@@ -296,7 +316,149 @@ const chatCompletionSchema = z.object({
     .optional()
 });
 
+const blueprintLanguageAnalysisResponseSchema = z.object({
+  detected_languages: z.array(
+    z.object({
+      tag: z.string().min(1),
+      display_name: z.string().min(1).optional(),
+      confidence: z.number().min(0).max(1).nullable().optional(),
+      page_numbers: z.array(z.number().int().positive()).optional()
+    })
+  ).min(1),
+  primary_language: z.object({
+    tag: z.string().min(1).nullable(),
+    confidence: z.number().min(0).max(1).nullable()
+  }),
+  mixed_language_page_numbers: z.array(z.number().int().positive()),
+  multilingual_relationship: z.enum([
+    "MONOLINGUAL",
+    "DUPLICATE_TRANSLATIONS",
+    "DISTINCT_REQUIREMENTS",
+    "MIXED_OR_UNCERTAIN"
+  ]),
+  page_languages: z.array(
+    z.object({
+      page_number: z.number().int().positive(),
+      languages: z.array(
+        z.object({
+          tag: z.string().min(1),
+          display_name: z.string().min(1).optional(),
+          confidence: z.number().min(0).max(1).nullable().optional()
+        })
+      ).min(1)
+    })
+  ),
+  document_analysis: z.object({
+    document_type: z.enum(["QUESTION_PAPER", "MARKING_SCHEME", "UNKNOWN"]),
+    is_marking_scheme: z.boolean(),
+    confidence: z.number().min(0).max(1).nullable(),
+    title_language_tag: z.string().min(1).nullable(),
+    header_language_tag: z.string().min(1).nullable(),
+    evidence_page_numbers: z.array(z.number().int().positive()),
+    evaluator_instruction_page_numbers: z.array(z.number().int().positive()),
+    marking_scheme_page_numbers: z.array(z.number().int().positive()),
+    paper_code: z.string().min(1).nullable()
+  })
+});
+
+const blueprintLanguageAnalysisJsonSchema = {
+  title: "BlueprintLanguageAnalysis",
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "detected_languages",
+    "primary_language",
+    "mixed_language_page_numbers",
+    "multilingual_relationship",
+    "page_languages",
+    "document_analysis"
+  ],
+  properties: {
+    detected_languages: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["tag"],
+        properties: {
+          tag: { type: "string" },
+          display_name: { type: "string" },
+          confidence: { type: ["number", "null"], minimum: 0, maximum: 1 },
+          page_numbers: { type: "array", items: { type: "integer", minimum: 1 } }
+        }
+      }
+    },
+    primary_language: {
+      type: "object",
+      additionalProperties: false,
+      required: ["tag", "confidence"],
+      properties: {
+        tag: { type: ["string", "null"] },
+        confidence: { type: ["number", "null"], minimum: 0, maximum: 1 }
+      }
+    },
+    mixed_language_page_numbers: { type: "array", items: { type: "integer", minimum: 1 } },
+    multilingual_relationship: {
+      type: "string",
+      enum: ["MONOLINGUAL", "DUPLICATE_TRANSLATIONS", "DISTINCT_REQUIREMENTS", "MIXED_OR_UNCERTAIN"]
+    },
+    page_languages: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["page_number", "languages"],
+        properties: {
+          page_number: { type: "integer", minimum: 1 },
+          languages: {
+            type: "array",
+            minItems: 1,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["tag"],
+              properties: {
+                tag: { type: "string" },
+                display_name: { type: "string" },
+                confidence: { type: ["number", "null"], minimum: 0, maximum: 1 }
+              }
+            }
+          }
+        }
+      }
+    },
+    document_analysis: {
+      type: "object",
+      additionalProperties: false,
+      required: ["document_type", "is_marking_scheme", "confidence", "title_language_tag", "header_language_tag", "evidence_page_numbers", "evaluator_instruction_page_numbers", "marking_scheme_page_numbers", "paper_code"],
+      properties: {
+        document_type: { type: "string", enum: ["QUESTION_PAPER", "MARKING_SCHEME", "UNKNOWN"] },
+        is_marking_scheme: { type: "boolean" },
+        confidence: { type: ["number", "null"], minimum: 0, maximum: 1 },
+        title_language_tag: { type: ["string", "null"] },
+        header_language_tag: { type: ["string", "null"] },
+        evidence_page_numbers: { type: "array", items: { type: "integer", minimum: 1 } },
+        evaluator_instruction_page_numbers: { type: "array", items: { type: "integer", minimum: 1 } },
+        marking_scheme_page_numbers: { type: "array", items: { type: "integer", minimum: 1 } },
+        paper_code: { type: ["string", "null"] }
+      }
+    }
+  }
+} as const;
+
 const defaultMistralRequestTimeoutMs = 120_000;
+
+const blueprintLanguageAnalysisSystemPrompt = [
+  "Analyze OCR pages from one uploaded blueprint document. Do not extract rules or rewrite the document.",
+  "Identify every language present using valid BCP 47 tags, including mixed-language pages.",
+  "Classify this as QUESTION_PAPER, MARKING_SCHEME, or UNKNOWN from its title, headings, table roles, question/value-point structure, and instructions in any language or script. Do not rely on English words.",
+  "Return document_analysis with document_type, title/header language evidence, instruction-page and marking-scheme-page numbers, and a paper code only when visible in the document.",
+  "Classify multilingual content as MONOLINGUAL, DUPLICATE_TRANSLATIONS when blocks express the same rules, DISTINCT_REQUIREMENTS when language blocks contain additional requirements, or MIXED_OR_UNCERTAIN when evidence is insufficient.",
+  "Page language evidence must preserve every detected language; never treat a bilingual document as separate documents.",
+  "Choose a primary language only from detected languages. If uncertain, set tag to null and confidence to null.",
+  "Return only the requested JSON."
+].join(" ");
 
 const segmentationSystemPrompt = [
   "Segment OCR markdown into question candidates only. Do not answer or solve.",
@@ -341,7 +503,7 @@ const solvingSystemPrompt = [
 export class MistralOcrProvider {
   constructor(private readonly config: MistralConfig) {}
 
-  async processDocumentUrl(documentUrl: string): Promise<OcrResult> {
+  async processDocumentUrl(documentUrl: string, pageNumbers?: number[]): Promise<OcrResult> {
     const raw = await callMistral(
       this.config,
       "/v1/ocr",
@@ -353,11 +515,250 @@ export class MistralOcrProvider {
         },
         confidence_scores_granularity: "word",
         table_format: "markdown",
-        include_image_base64: true
+        include_image_base64: true,
+        ...(pageNumbers && pageNumbers.length > 0 ? { pages: pageNumbers.map((pageNumber) => pageNumber - 1) } : {})
       }
     );
     return parseMistralOcrResult(raw);
   }
+}
+
+export class MistralBlueprintLanguageAnalyzer {
+  constructor(private readonly config: MistralConfig) {}
+
+  async analyzePages(input: { pages: Array<{ pageNumber: number; markdown: string }> }): Promise<BlueprintLanguageAnalysisResult> {
+    const raw = await callMistral(this.config, "/v1/chat/completions", {
+      model: this.config.extractorModel,
+      temperature: 0,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "blueprint_language_analysis",
+          strict: true,
+          schema: blueprintLanguageAnalysisJsonSchema
+        }
+      },
+      messages: [
+        { role: "system", content: blueprintLanguageAnalysisSystemPrompt },
+        {
+          role: "user",
+          content: input.pages.map((page) => `Page ${page.pageNumber}:\n${page.markdown}`).join("\n\n")
+        }
+      ]
+    });
+    const completion = chatCompletionSchema.parse(raw);
+    const firstChoice = completion.choices[0];
+    if (!firstChoice) {
+      throw new Error("Mistral Blueprint language analysis returned no choices");
+    }
+    const analysis = blueprintLanguageAnalysisResponseSchema.parse(JSON.parse(firstChoice.message.content) as unknown);
+
+    return {
+      provider: "mistral",
+      model: this.config.extractorModel,
+      detectedLanguages: analysis.detected_languages.map((language) => ({
+        tag: language.tag,
+        displayName: language.display_name,
+        confidence: language.confidence,
+        pageNumbers: language.page_numbers
+      })),
+      primaryLanguage: {
+        tag: analysis.primary_language.tag,
+        confidence: analysis.primary_language.confidence
+      },
+      mixedLanguagePageNumbers: analysis.mixed_language_page_numbers,
+      multilingualRelationship: analysis.multilingual_relationship,
+      pageLanguages: analysis.page_languages.map((page) => ({
+        pageNumber: page.page_number,
+        languages: page.languages.map((language) => ({
+          tag: language.tag,
+          displayName: language.display_name,
+          confidence: language.confidence
+        }))
+      })),
+      documentAnalysis: {
+        documentType: analysis.document_analysis.document_type,
+        isMarkingScheme: analysis.document_analysis.is_marking_scheme,
+        confidence: analysis.document_analysis.confidence,
+        titleLanguageTag: analysis.document_analysis.title_language_tag,
+        headerLanguageTag: analysis.document_analysis.header_language_tag,
+        evidencePageNumbers: analysis.document_analysis.evidence_page_numbers,
+        evaluatorInstructionPageNumbers: analysis.document_analysis.evaluator_instruction_page_numbers,
+        markingSchemePageNumbers: analysis.document_analysis.marking_scheme_page_numbers,
+        paperCode: analysis.document_analysis.paper_code
+      },
+      rawJson: raw,
+      usage: {
+        promptTokens: completion.usage?.prompt_tokens,
+        completionTokens: completion.usage?.completion_tokens,
+        totalTokens: completion.usage?.total_tokens
+      }
+    };
+  }
+}
+
+export class MistralBlueprintRuleExtractor {
+  constructor(private readonly config: MistralConfig) {}
+
+  async extractRules(input: {
+    primaryLanguage: string;
+    pages: BlueprintStructuredOcrPage[];
+  }): Promise<BlueprintExtractionResult> {
+    const chunks = structuralExtractionChunks(input.pages);
+    const skeletonPasses = await Promise.all(chunks.map((pages) => this.extractSkeletonChunk(input.primaryLanguage, pages)));
+    const consolidated = consolidateBlueprintSkeletons(skeletonPasses.map((pass) => pass.result));
+    const inventory = extractBlueprintQuestionInventory(input.pages);
+    let audit = auditBlueprintExtraction({
+      skeleton: consolidated.skeleton,
+      inventory,
+      observedQuestionNumbers: uniqueQuestionNumbers(skeletonPasses.flatMap((pass) => pass.result.question_index.map((question) => question.number)))
+    });
+    const auditBeforeRecovery = audit;
+    const recoveryPlan = buildBlueprintRecoveryPlan({
+      audit,
+      inventory,
+      pages: input.pages,
+    });
+    let recoveryPass: Awaited<ReturnType<MistralBlueprintRuleExtractor["recoverMissingQuestions"]>> | undefined;
+    let recoveryFailure: { message: string; rawJson?: unknown } | undefined;
+    if (recoveryPlan) {
+      try {
+        recoveryPass = await this.recoverMissingQuestions(input.primaryLanguage, recoveryPlan.questionNumbers, recoveryPlan.pages);
+      } catch (error) {
+        recoveryFailure = {
+          message: error instanceof Error ? error.message : "Targeted structural recovery failed.",
+          ...(error instanceof BlueprintExtractionResponseError ? { rawJson: error.rawJson } : {})
+        };
+      }
+    }
+    if (recoveryPass) {
+      const recovered = consolidateBlueprintSkeletons([consolidated.skeleton, { ...consolidated.skeleton, question_index: recoveryPass.result.question_index }]);
+      audit = auditBlueprintExtraction({
+        skeleton: recovered.skeleton,
+        inventory,
+        observedQuestionNumbers: uniqueQuestionNumbers(skeletonPasses.flatMap((pass) => pass.result.question_index.map((question) => question.number)).concat(recoveryPass.result.question_index.map((question) => question.number)))
+      });
+    }
+    const recoveredQuestionNumbers = auditBeforeRecovery.missingQuestionNumbers.filter((questionNumber) => !audit.missingQuestionNumbers.includes(questionNumber));
+    const recovery = {
+      attempted: recoveryPlan !== null,
+      requestedQuestionNumbers: auditBeforeRecovery.missingQuestionNumbers,
+      pageNumbers: recoveryPlan?.pageNumbers ?? [],
+      recoveredQuestionNumbers,
+      ...(recoveryFailure ? { failure: recoveryFailure } : {})
+    };
+    const passes = [...skeletonPasses, ...(recoveryPass ? [recoveryPass] : [])];
+    const auditWarnings = blueprintExtractionAuditWarnings(audit);
+    const recoveryWarnings = auditBeforeRecovery.missingQuestionNumbers.length > 0 && !recoveryPass
+      ? [recoveryFailure
+        ? `Targeted recovery for missing structural questions failed: ${recoveryFailure.message}`
+        : "Missing numeric structural questions were detected, but no affected OCR pages were available for targeted recovery."]
+      : [];
+    return {
+      provider: "mistral",
+      model: this.config.extractorModel,
+      rules: consolidateBlueprintSkeletons([consolidated.skeleton, ...(recoveryPass ? [{ ...consolidated.skeleton, question_index: recoveryPass.result.question_index }] : [])]).skeleton,
+      confidence: averageConfidence(passes.map((pass) => pass.confidence)),
+      sourceReferences: uniqueBy(passes.flatMap((pass) => pass.sourceReferences), (reference) => `${reference.pageNumber}:${reference.startOffset ?? ""}:${reference.endOffset ?? ""}:${reference.snippet ?? ""}`),
+      warnings: uniqueBy([...skeletonPasses.flatMap((pass) => pass.warnings), ...(recoveryPass?.warnings ?? []), ...consolidated.warnings, ...auditWarnings, ...recoveryWarnings], (warning) => warning),
+      rawJson: {
+        skeletonPasses: skeletonPasses.map((pass) => pass.rawJson),
+        recoveryPass: recoveryPass?.rawJson ?? null,
+        recoveryFailure: recoveryFailure ?? null,
+        auditBeforeRecovery
+      },
+      audit,
+      recovery,
+      usage: {
+        promptTokens: sumDefined(passes.map((pass) => pass.usage.promptTokens)),
+        completionTokens: sumDefined(passes.map((pass) => pass.usage.completionTokens)),
+        totalTokens: sumDefined(passes.map((pass) => pass.usage.totalTokens))
+      }
+    };
+  }
+
+  private async extractSkeletonChunk(primaryLanguage: string, pages: BlueprintStructuredOcrPage[]) {
+    const raw = await callMistral(this.config, "/v1/chat/completions", {
+      model: this.config.extractorModel,
+      temperature: 0,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "blueprint_skeleton_extraction",
+          strict: true,
+          schema: blueprintSkeletonExtractionJsonSchema
+        }
+      },
+      messages: [
+        { role: "system", content: blueprintSkeletonExtractionSystemPrompt },
+        { role: "user", content: blueprintSkeletonExtractionUserPrompt({ primaryLanguage, pages }) }
+      ]
+    });
+
+    try {
+      return parseBlueprintSkeletonExtractionResult(raw);
+    } catch (error) {
+      throw new BlueprintExtractionResponseError(
+        error instanceof Error ? error.message : "Blueprint extraction response was invalid.",
+        raw
+      );
+    }
+  }
+
+  private async recoverMissingQuestions(
+    primaryLanguage: string,
+    missingQuestionNumbers: string[],
+    pages: BlueprintStructuredOcrPage[]
+  ) {
+    const raw = await callMistral(this.config, "/v1/chat/completions", {
+      model: this.config.extractorModel,
+      temperature: 0,
+      response_format: { type: "json_schema", json_schema: { name: "blueprint_structural_recovery", strict: true, schema: blueprintSkeletonRecoveryJsonSchema } },
+      messages: [
+        { role: "system", content: blueprintSkeletonExtractionSystemPrompt },
+        { role: "user", content: blueprintSkeletonRecoveryUserPrompt({ primaryLanguage, missingQuestionNumbers, pages }) }
+      ]
+    });
+    try {
+      return parseBlueprintSkeletonRecoveryResult(raw);
+    } catch (error) {
+      throw new BlueprintExtractionResponseError(error instanceof Error ? error.message : "Structural Blueprint recovery response was invalid.", raw);
+    }
+  }
+}
+
+function structuralExtractionChunks(pages: BlueprintStructuredOcrPage[]) {
+  const ordered = pages.slice().sort((left, right) => left.pageNumber - right.pageNumber);
+  const chunks: BlueprintStructuredOcrPage[][] = [];
+  for (let start = 0; start < ordered.length; start += 5) {
+    const chunk = ordered.slice(start, start + 6);
+    if (chunk.length > 0) chunks.push(chunk);
+  }
+  return chunks.length > 0 ? chunks : [ordered];
+}
+
+function averageConfidence(values: Array<number | null>) {
+  const known = values.filter((value): value is number => value !== null);
+  return known.length === 0 ? null : known.reduce((total, value) => total + value, 0) / known.length;
+}
+
+function sumDefined(values: Array<number | undefined>) {
+  const known = values.filter((value): value is number => value !== undefined);
+  return known.length === 0 ? undefined : known.reduce((total, value) => total + value, 0);
+}
+
+function uniqueBy<T>(values: T[], key: (value: T) => string) {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const valueKey = key(value);
+    if (seen.has(valueKey)) return false;
+    seen.add(valueKey);
+    return true;
+  });
+}
+
+function uniqueQuestionNumbers(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()))];
 }
 
 export class MistralBatchProvider {
