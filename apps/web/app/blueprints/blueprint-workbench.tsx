@@ -261,8 +261,8 @@ export function BlueprintWorkbench({ initialBlueprint, initialPages }: Blueprint
             <>
               <div className="blueprint-rule-summary">
                 <strong>{rulesDirty ? "Unapproved edits" : "Extraction ready for review"}</strong>
-                <p className="muted">Review the marking scheme in the form, check source pages, then approve it to save this Blueprint.</p>
-                <button className="btn compact" type="button" onClick={() => setRuleEditorOpen(true)}>Review marking scheme</button>
+                <p className="muted">Check the sections, question groups, marks, choices, and source pages before saving.</p>
+                <button className="btn compact" type="button" onClick={() => setRuleEditorOpen(true)}>Review your Blueprint</button>
               </div>
               {rulesNotice ? <div className="status compact">{rulesNotice}</div> : null}
             </>

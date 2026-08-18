@@ -279,6 +279,9 @@ export function registerBlueprintRoutes(app: FastifyInstance, config: ApiConfig)
     if (blueprintDocument.status !== "READY") {
       return reply.code(409).send({ error: "BLUEPRINT_NOT_APPROVED" });
     }
+    if (isLegacyBlueprintDraft(blueprintDocument)) {
+      return reply.code(409).send({ error: "BLUEPRINT_LEGACY_DRAFT_REQUIRES_REEXTRACTION" });
+    }
     return blueprintSavedRulesPayload(blueprintDocument);
   });
 
@@ -388,7 +391,8 @@ export function registerBlueprintRoutes(app: FastifyInstance, config: ApiConfig)
       if (!blueprintDocument) {
         return { error: "BLUEPRINT_NOT_FOUND" as const };
       }
-      if (blueprintDocument.status !== "NEEDS_REVIEW" && blueprintDocument.status !== "FAILED") {
+      const legacyDraft = isLegacyBlueprintDraft(blueprintDocument);
+      if (blueprintDocument.status !== "NEEDS_REVIEW" && blueprintDocument.status !== "FAILED" && !(blueprintDocument.status === "READY" && legacyDraft)) {
         return { error: "BLUEPRINT_NOT_RETRYABLE" as const };
       }
 
@@ -628,6 +632,15 @@ function blueprintMetadataUpdateData(input: z.output<typeof blueprintMetadataPat
 
 function blueprintRulesInputJson(value: unknown) {
   return value === null ? Prisma.JsonNull : toInputJson(value);
+}
+
+function isLegacyBlueprintDraft(document: { draftRulesJson?: unknown; extractionMetadataJson?: unknown }) {
+  const rules = document.draftRulesJson;
+  if (!rules || typeof rules !== "object" || Array.isArray(rules)) return false;
+  if ("question_marking_scheme" in rules) return true;
+  const metadata = document.extractionMetadataJson;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return true;
+  return (metadata as Record<string, unknown>).schemaVersion !== 2;
 }
 
 function buildBlueprintObjectKey(fileName: string) {

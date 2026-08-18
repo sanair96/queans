@@ -1,6 +1,7 @@
 import {
   blueprintExtractionEnvelopeSchema,
   blueprintLanguageAnalysisSchema,
+  blueprintRulesSchema,
   type BlueprintIngestionWorkflowInput
 } from "@queans/core";
 import { Prisma, prisma } from "@queans/db";
@@ -170,6 +171,7 @@ export async function analyzeBlueprintStructure(input: BlueprintIngestionWorkflo
         detectedLanguages: toInputJson(analysis.languageAnalysis.detectedLanguages),
         primaryLanguage: analysis.languageAnalysis.primaryLanguage.tag,
         primaryLanguageSource: analysis.languageAnalysis.primaryLanguage.source,
+        documentType: documentTypeFromLanguageMetadata(analysis.languageAnalysis.metadata),
         languageDetectionMetadata: toInputJson(analysis.languageAnalysis)
       }
     });
@@ -179,7 +181,12 @@ export async function analyzeBlueprintStructure(input: BlueprintIngestionWorkflo
 export async function extractBlueprintRules(input: BlueprintIngestionWorkflowInput) {
   const blueprintDocument = await prisma.blueprintDocument.findUnique({
     where: { id: input.blueprintDocumentId },
-    include: { ocrPages: { orderBy: { pageNumber: "asc" } } }
+    include: {
+      ocrPages: {
+        orderBy: { pageNumber: "asc" },
+        include: { ocrBlocks: true, ocrAssets: true }
+      }
+    }
   });
   if (!blueprintDocument) {
     throw new Error(`Blueprint document ${input.blueprintDocumentId} not found`);
@@ -205,10 +212,10 @@ export async function extractBlueprintRules(input: BlueprintIngestionWorkflowInp
     return;
   }
 
-  if (!isRecognizedMarkingScheme(languageAnalysis.data.metadata)) {
+  if (!isRecognizedBlueprintDocument(languageAnalysis.data.metadata)) {
     await markBlueprintNeedsReview({
       blueprintDocumentId: blueprintDocument.id,
-      error: "This document could not be recognized as a marking scheme. Check the upload or replace it with the marking-scheme PDF."
+      error: "This document could not be recognized as a question paper or marking scheme. Check the upload and try again."
     });
     return;
   }
@@ -218,8 +225,7 @@ export async function extractBlueprintRules(input: BlueprintIngestionWorkflowInp
   try {
     const extraction = await extractor.extractRules({
       primaryLanguage,
-      pages: blueprintDocument.ocrPages.map((page) => ({ pageNumber: page.pageNumber, markdown: page.markdownText })),
-      ...documentPageRoles(languageAnalysis.data.metadata)
+      pages: blueprintDocument.ocrPages.map((page) => blueprintStructuredOcrPage(page))
     });
     const persistedExtraction = createPersistedBlueprintExtraction(extraction);
     rawExtractionJson = persistedExtraction;
@@ -244,6 +250,10 @@ export async function extractBlueprintRules(input: BlueprintIngestionWorkflowInp
           confidence: envelope.confidence,
           sourceReferences: envelope.sourceReferences,
           warnings: envelope.warnings,
+          audit: extraction.audit ?? null,
+          recovery: extraction.recovery ?? null,
+          schemaVersion: 2,
+          documentType: documentTypeFromLanguageMetadata(languageAnalysis.data.metadata),
           providerMetadata: envelope.providerMetadata
         }),
         extractionError: null
@@ -270,26 +280,20 @@ export async function extractBlueprintRules(input: BlueprintIngestionWorkflowInp
   }
 }
 
-function documentPageRoles(metadata: unknown) {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return {};
-  const documentAnalysis = (metadata as Record<string, unknown>).documentAnalysis;
-  if (!documentAnalysis || typeof documentAnalysis !== "object" || Array.isArray(documentAnalysis)) return {};
-  const record = documentAnalysis as Record<string, unknown>;
-  const pageNumbers = (value: unknown) => Array.isArray(value)
-    ? value.filter((pageNumber): pageNumber is number => Number.isInteger(pageNumber) && pageNumber > 0)
-    : [];
-  return {
-    evaluatorInstructionPageNumbers: pageNumbers(record.evaluatorInstructionPageNumbers),
-    markingSchemePageNumbers: pageNumbers(record.markingSchemePageNumbers)
-  };
-}
-
-function isRecognizedMarkingScheme(metadata: unknown) {
+function isRecognizedBlueprintDocument(metadata: unknown) {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
   const documentAnalysis = (metadata as Record<string, unknown>).documentAnalysis;
   if (!documentAnalysis || typeof documentAnalysis !== "object" || Array.isArray(documentAnalysis)) return false;
   const record = documentAnalysis as Record<string, unknown>;
-  return record.isMarkingScheme === true && typeof record.confidence === "number" && record.confidence >= 0.7;
+  return ["QUESTION_PAPER", "MARKING_SCHEME"].includes(String(record.documentType)) && typeof record.confidence === "number" && record.confidence >= 0.7;
+}
+
+function documentTypeFromLanguageMetadata(metadata: unknown) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const documentAnalysis = (metadata as Record<string, unknown>).documentAnalysis;
+  if (!documentAnalysis || typeof documentAnalysis !== "object" || Array.isArray(documentAnalysis)) return null;
+  const documentType = (documentAnalysis as Record<string, unknown>).documentType;
+  return documentType === "QUESTION_PAPER" || documentType === "MARKING_SCHEME" ? documentType : null;
 }
 
 export async function persistBlueprintDraft(input: BlueprintIngestionWorkflowInput) {
@@ -299,40 +303,52 @@ export async function persistBlueprintDraft(input: BlueprintIngestionWorkflowInp
   if (!blueprintDocument) {
     throw new Error(`Blueprint document ${input.blueprintDocumentId} not found`);
   }
-  if (!blueprintDocument.rawExtractionJson || blueprintDocument.status === "NEEDS_REVIEW") {
+  if (!blueprintDocument.rawExtractionJson) {
     return;
   }
+  try {
+    const languageAnalysis = blueprintLanguageAnalysisSchema.parse(blueprintDocument.languageDetectionMetadata);
+    const extraction = parsePersistedBlueprintExtraction(blueprintDocument.rawExtractionJson);
+    const providerMetadata = providerMetadataFromExtractionMetadata(blueprintDocument.extractionMetadataJson) ?? {
+      provider: extraction.provider,
+      model: extraction.model,
+      usage: definedValues(extraction.usage)
+    };
+    const envelope = blueprintExtractionEnvelopeSchema.parse({
+      rules: extraction.rules,
+      languageAnalysis,
+      confidence: extraction.confidence,
+      sourceReferences: extraction.sourceReferences,
+      warnings: extraction.warnings,
+      providerMetadata
+    });
+    const structuralRules = blueprintRulesSchema.parse(envelope.rules);
 
-  const languageAnalysis = blueprintLanguageAnalysisSchema.parse(blueprintDocument.languageDetectionMetadata);
-  const extraction = parsePersistedBlueprintExtraction(blueprintDocument.rawExtractionJson);
-  const providerMetadata = providerMetadataFromExtractionMetadata(blueprintDocument.extractionMetadataJson) ?? {
-    provider: extraction.provider,
-    model: extraction.model,
-    usage: definedValues(extraction.usage)
-  };
-  const envelope = blueprintExtractionEnvelopeSchema.parse({
-    rules: extraction.rules,
-    languageAnalysis,
-    confidence: extraction.confidence,
-    sourceReferences: extraction.sourceReferences,
-    warnings: extraction.warnings,
-    providerMetadata
-  });
-
-  await prisma.blueprintDocument.update({
-    where: { id: blueprintDocument.id },
-    data: {
-      draftRulesJson: blueprintRulesInputJson(envelope.rules),
-      confidenceSummaryJson: toInputJson({ extraction: envelope.confidence }),
-      extractionMetadataJson: toInputJson({
-        confidence: envelope.confidence,
-        sourceReferences: envelope.sourceReferences,
-        warnings: envelope.warnings,
-        providerMetadata: envelope.providerMetadata
-      }),
-      extractionError: null
-    }
-  });
+    await prisma.blueprintDocument.update({
+      where: { id: blueprintDocument.id },
+      data: {
+        draftRulesJson: blueprintRulesInputJson(structuralRules),
+        confidenceSummaryJson: toInputJson({ extraction: envelope.confidence }),
+        extractionMetadataJson: toInputJson({
+          confidence: envelope.confidence,
+          sourceReferences: envelope.sourceReferences,
+          warnings: envelope.warnings,
+          audit: extractionMetadataValue(blueprintDocument.extractionMetadataJson, "audit"),
+          recovery: extractionMetadataValue(blueprintDocument.extractionMetadataJson, "recovery"),
+          schemaVersion: 2,
+          documentType: documentTypeFromLanguageMetadata(languageAnalysis.metadata),
+          providerMetadata: envelope.providerMetadata
+        }),
+        extractionError: null
+      }
+    });
+  } catch (error) {
+    await markBlueprintNeedsReview({
+      blueprintDocumentId: blueprintDocument.id,
+      error: `Blueprint extraction draft is invalid: ${error instanceof Error ? error.message : "unknown validation error"}`,
+      rawExtractionJson: blueprintDocument.rawExtractionJson
+    });
+  }
 }
 
 export async function beginBlueprintWorkflow(input: BlueprintIngestionWorkflowInput) {
@@ -364,6 +380,8 @@ export async function beginBlueprintWorkflow(input: BlueprintIngestionWorkflowIn
           ? {
             rawExtractionJson: Prisma.DbNull,
             extractionMetadataJson: Prisma.DbNull,
+            draftRulesJson: Prisma.DbNull,
+            confidenceSummaryJson: Prisma.DbNull,
             extractionError: null
           }
           : {})
@@ -382,6 +400,14 @@ export async function beginBlueprintWorkflow(input: BlueprintIngestionWorkflowIn
 }
 
 export async function completeBlueprintWorkflow(input: BlueprintIngestionWorkflowInput) {
+  const blueprintDocument = await prisma.blueprintDocument.findUnique({
+    where: { id: input.blueprintDocumentId },
+    select: { extractionMetadataJson: true }
+  });
+  const finalBlueprintStatus = blueprintAuditReconciled(blueprintDocument?.extractionMetadataJson)
+    ? "READY"
+    : "NEEDS_REVIEW";
+
   const claimed = await prisma.workflowRun.updateMany({
     where: {
       id: input.workflowRunId,
@@ -406,7 +432,7 @@ export async function completeBlueprintWorkflow(input: BlueprintIngestionWorkflo
         status: "PROCESSING",
         draftRulesJson: { not: Prisma.DbNull }
       },
-      data: { status: "NEEDS_REVIEW" }
+      data: { status: finalBlueprintStatus }
     }),
     prisma.workflowEvent.create({
       data: {
@@ -496,6 +522,68 @@ async function markBlueprintNeedsReview(input: {
 
 function blueprintRulesInputJson(value: unknown) {
   return value === null ? Prisma.JsonNull : toInputJson(value);
+}
+
+function blueprintStructuredOcrPage(page: {
+  pageNumber: number;
+  markdownText: string;
+  plainText: string | null;
+  ocrConfidence: number | null;
+  ocrBlocks: Array<{
+    blockType: string;
+    text: string;
+    confidence: number | null;
+    boundingBox: unknown;
+    sourceAsset: unknown;
+  }>;
+  ocrAssets: Array<{
+    sourceAssetId: string;
+    fileName: string;
+    mimeType: string;
+    boundingBox: unknown;
+    rawJson: unknown;
+  }>;
+}) {
+  return {
+    pageNumber: page.pageNumber,
+    markdown: page.markdownText,
+    plainText: page.plainText,
+    averageConfidence: page.ocrConfidence,
+    blocks: (page.ocrBlocks ?? []).map((block) => ({
+      blockType: block.blockType,
+      text: block.text,
+      confidence: block.confidence,
+      boundingBox: block.boundingBox,
+      sourceAsset: block.sourceAsset
+    })),
+    assets: (page.ocrAssets ?? []).map((asset) => ({
+      sourceAssetId: asset.sourceAssetId,
+      fileName: asset.fileName,
+      mimeType: asset.mimeType,
+      boundingBox: asset.boundingBox,
+      metadata: asset.rawJson
+    }))
+  };
+}
+
+function extractionMetadataValue(value: unknown, key: "audit" | "recovery") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return (value as Record<string, unknown>)[key] ?? null;
+}
+
+function blueprintAuditReconciled(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const audit = (value as Record<string, unknown>).audit;
+  return Boolean(
+    audit &&
+      typeof audit === "object" &&
+      !Array.isArray(audit) &&
+      (audit as Record<string, unknown>).reconciled === true
+  );
 }
 
 function definedValues(value: Record<string, unknown>) {

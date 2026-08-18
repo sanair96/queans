@@ -262,7 +262,7 @@ function selectPrimaryLanguage(input: {
   const titleOrHeaderAgrees = [input.documentAnalysis.titleLanguageTag, input.documentAnalysis.headerLanguageTag]
     .filter((tag): tag is string => Boolean(tag))
     .some((tag) => sameLanguage(tag, candidate.tag));
-  const confidentlyIdentifiedByDocument = input.documentAnalysis.isMarkingScheme && titleOrHeaderAgrees &&
+  const confidentlyIdentifiedByDocument = input.documentAnalysis.documentType !== "UNKNOWN" && titleOrHeaderAgrees &&
     (input.inferredPrimaryLanguage?.confidence ?? candidate.confidence ?? 0) >= 0.85;
   return {
     tag: candidate.tag,

@@ -21,6 +21,7 @@ function languageAnalysisForPages(input: {
       languages: [{ tag: page.tag, confidence: 0.99 }]
     })),
     documentAnalysis: {
+      documentType: "MARKING_SCHEME",
       isMarkingScheme: true,
       confidence: 0.99,
       titleLanguageTag: input.primaryLanguage,

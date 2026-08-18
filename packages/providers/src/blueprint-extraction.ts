@@ -7,8 +7,6 @@ export interface BlueprintRuleExtractor {
   extractRules(input: {
     primaryLanguage: string;
     pages: BlueprintStructuredOcrPage[];
-    evaluatorInstructionPageNumbers?: number[];
-    markingSchemePageNumbers?: number[];
   }): Promise<BlueprintExtractionResult>;
 }
 

@@ -71,6 +71,7 @@ const persistedLanguageAnalysis = {
   multilingualRelationship: "MONOLINGUAL",
   metadata: {
     documentAnalysis: {
+      documentType: "MARKING_SCHEME",
       isMarkingScheme: true,
       confidence: 0.99,
       titleLanguageTag: "hi",
@@ -145,14 +146,32 @@ describe("Blueprint workflow lifecycle activities", () => {
     expect(mocks.prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it("moves a completed extraction with a draft to ready-for-approval", async () => {
+  it("moves a completed extraction with an unreconciled draft to review", async () => {
     mocks.prisma.workflowRun.updateMany.mockResolvedValue({ count: 1 });
+    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({ extractionMetadataJson: { audit: { reconciled: false } } });
 
     await expect(completeBlueprintWorkflow(input)).resolves.toEqual({ completed: true });
     const completionCall: unknown = mocks.prisma.blueprintDocument.updateMany.mock.calls[0]?.[0];
     expect(completionCall).toMatchObject({
       where: { id: "blueprint-1", status: "PROCESSING" },
       data: { status: "NEEDS_REVIEW" }
+    });
+  });
+
+  it("moves a completed reconciled extraction with a draft to ready", async () => {
+    mocks.prisma.workflowRun.updateMany.mockResolvedValue({ count: 1 });
+    mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({
+      extractionMetadataJson: {
+        audit: { reconciled: true },
+        recovery: { attempted: true, requestedQuestionNumbers: ["2"], pageNumbers: [1, 2, 3], recoveredQuestionNumbers: ["2"] }
+      }
+    });
+
+    await expect(completeBlueprintWorkflow(input)).resolves.toEqual({ completed: true });
+    const completionCall: unknown = mocks.prisma.blueprintDocument.updateMany.mock.calls[0]?.[0];
+    expect(completionCall).toMatchObject({
+      where: { id: "blueprint-1", status: "PROCESSING" },
+      data: { status: "READY" }
     });
   });
 
@@ -279,6 +298,7 @@ describe("Blueprint workflow lifecycle activities", () => {
         { pageNumber: 2, languages: [{ tag: "hi", confidence: 0.99 }] }
       ],
       documentAnalysis: {
+        documentType: "QUESTION_PAPER",
         isMarkingScheme: true,
         confidence: 0.98,
         titleLanguageTag: "en",
@@ -321,15 +341,38 @@ describe("Blueprint workflow lifecycle activities", () => {
     mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({
       id: "blueprint-1",
       languageDetectionMetadata: persistedLanguageAnalysis,
-      ocrPages: [{ pageNumber: 1, markdownText: "# खंड अ\nसभी प्रश्नों के उत्तर दीजिए" }]
+      ocrPages: [{
+        pageNumber: 1,
+        markdownText: "# खंड अ\nसभी प्रश्नों के उत्तर दीजिए",
+        plainText: "खंड अ\nसभी प्रश्नों के उत्तर दीजिए",
+        ocrConfidence: 0.96,
+        ocrBlocks: [{ blockType: "table", text: "1. पांच अंक", confidence: 0.9, boundingBox: { x: 10 }, sourceAsset: { imageId: "image-1" } }],
+        ocrAssets: [{ sourceAssetId: "image-1", fileName: "table.png", mimeType: "image/png", boundingBox: { x: 20 }, rawJson: { provider: "mistral" } }]
+      }]
     });
     mocks.blueprintExtraction.extractRules.mockResolvedValue({
       provider: "mistral",
       model: "mistral-small-latest",
-      rules: { "खंड अ": { निर्देश: ["सभी प्रश्नों के उत्तर दीजिए"], अंक: 10 } },
+      rules: {
+        document_metadata: { title: null, subject: "Hindi", examination: null, paper_code: null, session: null, total_marks: 10, source_pages: [1] },
+        evaluation_rules: [],
+        assessment_blueprint: { sections: [{ name: "खंड अ", printed_identifier: null, question_range: "1", question_type: "Short answer", choice_rules: [], declared_marks: 10, source_pages: [1] }], total_marks: 10, source_pages: [1] },
+        question_index: [{ number: "1", section: "खंड अ", marks: 10, question_type: "Short answer", part_labels: [], alternative_labels: [], source_pages: [1] }]
+      },
       confidence: 0.91,
       sourceReferences: [{ pageNumber: 1, languageTag: "hi", snippet: "सभी प्रश्नों" }],
       warnings: [],
+      audit: {
+        reconciled: true,
+        expectedQuestionNumbers: ["1"],
+        extractedQuestionNumbers: ["1"],
+        missingQuestionNumbers: [],
+        duplicateQuestionNumbers: [],
+        conflicts: [],
+        markReconciliation: { status: "MATCH", declaredTotalMarks: 10, extractedTotalMarks: 10, choiceAdjustedSections: [] },
+        unparseableRanges: []
+      },
+      recovery: { attempted: false, requestedQuestionNumbers: [], pageNumbers: [], recoveredQuestionNumbers: [] },
       rawJson: { choices: [{ message: { content: "provider response" } }] },
       usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 }
     });
@@ -338,9 +381,14 @@ describe("Blueprint workflow lifecycle activities", () => {
 
     expect(mocks.blueprintExtraction.extractRules).toHaveBeenCalledWith({
       primaryLanguage: "hi",
-      pages: [{ pageNumber: 1, markdown: "# खंड अ\nसभी प्रश्नों के उत्तर दीजिए" }],
-      evaluatorInstructionPageNumbers: [],
-      markingSchemePageNumbers: [1]
+      pages: [{
+        pageNumber: 1,
+        markdown: "# खंड अ\nसभी प्रश्नों के उत्तर दीजिए",
+        plainText: "खंड अ\nसभी प्रश्नों के उत्तर दीजिए",
+        averageConfidence: 0.96,
+        blocks: [{ blockType: "table", text: "1. पांच अंक", confidence: 0.9, boundingBox: { x: 10 }, sourceAsset: { imageId: "image-1" } }],
+        assets: [{ sourceAssetId: "image-1", fileName: "table.png", mimeType: "image/png", boundingBox: { x: 20 }, metadata: { provider: "mistral" } }]
+      }],
     });
     const extractionUpdate: unknown = mocks.prisma.blueprintDocument.update.mock.calls[0]?.[0];
     expect(extractionUpdate).toMatchObject({
@@ -350,6 +398,10 @@ describe("Blueprint workflow lifecycle activities", () => {
           provider: "mistral",
           model: "mistral-small-latest",
           rawProviderResponse: { choices: [{ message: { content: "provider response" } }] }
+        },
+        extractionMetadataJson: {
+          audit: { reconciled: true },
+          recovery: { attempted: false }
         },
         extractionError: null
       }
@@ -456,17 +508,32 @@ describe("Blueprint workflow lifecycle activities", () => {
     expect(JSON.stringify(reviewUpdate)).toContain("Blueprint extraction draft is invalid");
   });
 
-  it("persists a validated arbitrary JSON draft, including the JSON null primitive", async () => {
+  it("persists a valid unreconciled draft, including the JSON null primitive and recovery details", async () => {
     mocks.prisma.blueprintDocument.findUnique.mockResolvedValue({
       id: "blueprint-1",
-      status: "PROCESSING",
+      status: "NEEDS_REVIEW",
       languageDetectionMetadata: persistedLanguageAnalysis,
+      extractionMetadataJson: {
+        audit: { reconciled: false, missingQuestionNumbers: ["2"] },
+        recovery: {
+          attempted: true,
+          requestedQuestionNumbers: ["2"],
+          pageNumbers: [1, 2, 3],
+          recoveredQuestionNumbers: [],
+          failure: { message: "recovery provider unavailable" }
+        }
+      },
       rawExtractionJson: { choices: [{ message: { content: "provider response" } }] }
     });
     mocks.parseBlueprintExtraction.mockReturnValue({
       provider: "mistral",
       model: "mistral-small-latest",
-      rules: null,
+      rules: {
+        document_metadata: { title: null, subject: "Hindi", examination: null, paper_code: null, session: null, total_marks: 10, source_pages: [1] },
+        evaluation_rules: [],
+        assessment_blueprint: { sections: [{ name: "Section A", printed_identifier: null, question_range: "1-2", question_type: "Short answer", choice_rules: [], declared_marks: 10, source_pages: [1, 2] }], total_marks: 10, source_pages: [1, 2] },
+        question_index: [{ number: "1", section: "Section A", marks: 5, question_type: "Short answer", part_labels: [], alternative_labels: [], source_pages: [1] }]
+      },
       confidence: 0.8,
       sourceReferences: [{ pageNumber: 1, languageTag: "hi" }],
       warnings: ["OCR table boundary uncertain"],
@@ -479,8 +546,18 @@ describe("Blueprint workflow lifecycle activities", () => {
     expect(draftUpdate).toMatchObject({
       where: { id: "blueprint-1" },
       data: {
-        draftRulesJson: null,
+        draftRulesJson: { question_index: [{ number: "1", marks: 5 }] },
         confidenceSummaryJson: { extraction: 0.8 },
+        extractionMetadataJson: {
+          audit: { reconciled: false, missingQuestionNumbers: ["2"] },
+          recovery: {
+            attempted: true,
+            requestedQuestionNumbers: ["2"],
+            pageNumbers: [1, 2, 3],
+            recoveredQuestionNumbers: [],
+            failure: { message: "recovery provider unavailable" }
+          }
+        },
         extractionError: null
       }
     });

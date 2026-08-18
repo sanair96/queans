@@ -108,8 +108,8 @@ const { buildServer } = await import("./server.js");
 const markingSchemeRulesFixture = {
   document_metadata: { title: null, subject: "Hindi", examination: null, paper_code: "2/8/2", session: null, total_marks: 10, source_pages: [1] },
   evaluation_rules: [{ rule: "Answer all questions.", source_pages: [1] }],
-  assessment_blueprint: { sections: [{ name: "Section A", question_range: "1", question_type: null, choice_rules: [], declared_marks: 10, source_pages: [1] }], total_marks: 10, source_pages: [1] },
-  question_marking_scheme: [{ number: "1", section: "Section A", marks: 10, parts: [], alternatives: [], value_points: [], acceptable_answers: [], marking_notes: [], source_pages: [1] }]
+  assessment_blueprint: { sections: [{ name: "Section A", printed_identifier: "A", question_range: "1", question_type: "Short answer", choice_rules: [], declared_marks: 10, source_pages: [1] }], total_marks: 10, source_pages: [1] },
+  question_index: [{ number: "1", section: "Section A", marks: 10, question_type: "Short answer", part_labels: [], alternative_labels: [], source_pages: [1] }]
 };
 const {
   blueprintDetailPayload,
@@ -421,7 +421,7 @@ describe("Blueprint API routes", () => {
         where: { id: "blueprint-1", status: "NEEDS_REVIEW", reviewVersion: 3 },
         data: { reviewVersion: { increment: 1 }, extractionError: null, status: "READY" }
       });
-      expect(response.json()).toMatchObject({ reviewVersion: 4, draftRulesJson: { question_marking_scheme: [{ number: "1", marks: 10 }] } });
+      expect(response.json()).toMatchObject({ reviewVersion: 4, draftRulesJson: { question_index: [{ number: "1", marks: 10 }] } });
     } finally {
       await app.close();
     }
@@ -471,7 +471,8 @@ describe("Blueprint API routes", () => {
       academicLevel: "10",
       primaryLanguage: "hi",
       status: "READY",
-      draftRulesJson: { duration: "3 hours" },
+      draftRulesJson: markingSchemeRulesFixture,
+      extractionMetadataJson: { schemaVersion: 2 },
       reviewVersion: 2,
       updatedAt: new Date()
     });
@@ -484,7 +485,7 @@ describe("Blueprint API routes", () => {
       expect(listResponse.statusCode).toBe(200);
       expect(listResponse.json()).toMatchObject({ items: [{ id: "blueprint-1", status: "READY" }] });
       expect(rulesResponse.statusCode).toBe(200);
-      expect(rulesResponse.json()).toMatchObject({ id: "blueprint-1", rules: { duration: "3 hours" }, reviewVersion: 2 });
+      expect(rulesResponse.json()).toMatchObject({ id: "blueprint-1", rules: { question_index: [{ number: "1" }] }, reviewVersion: 2 });
     } finally {
       await app.close();
     }

@@ -5,22 +5,17 @@ import {
   blueprintSkeletonExtractionJsonSchema,
   blueprintSkeletonExtractionSystemPrompt,
   blueprintSkeletonExtractionUserPrompt,
+  blueprintSkeletonRecoveryJsonSchema,
+  blueprintSkeletonRecoveryUserPrompt,
   consolidateBlueprintSkeletons,
-  markingSchemeRulesSchema,
-  mergeQuestionSchemesWithEvidence,
   parseBlueprintSkeletonExtractionResult,
-  parseQuestionSchemeExtractionResult,
-  questionSchemeExtractionJsonSchema,
-  questionSchemeExtractionSystemPrompt,
-  questionSchemeExtractionUserPrompt,
-  questionSchemeRecoverySystemPrompt,
-  questionSchemeRecoveryUserPrompt
+  parseBlueprintSkeletonRecoveryResult,
 } from "./blueprint-extraction-contract.js";
-import type { BlueprintSkeleton } from "./blueprint-extraction-contract.js";
 import {
   auditBlueprintExtraction,
   blueprintExtractionAuditWarnings,
-  buildBlueprintRecoveryPlan
+  buildBlueprintRecoveryPlan,
+  extractBlueprintQuestionInventory
 } from "./blueprint-extraction-audit.js";
 import type { BlueprintStructuredOcrPage } from "./types.js";
 import type {
@@ -354,6 +349,7 @@ const blueprintLanguageAnalysisResponseSchema = z.object({
     })
   ),
   document_analysis: z.object({
+    document_type: z.enum(["QUESTION_PAPER", "MARKING_SCHEME", "UNKNOWN"]),
     is_marking_scheme: z.boolean(),
     confidence: z.number().min(0).max(1).nullable(),
     title_language_tag: z.string().min(1).nullable(),
@@ -435,8 +431,9 @@ const blueprintLanguageAnalysisJsonSchema = {
     document_analysis: {
       type: "object",
       additionalProperties: false,
-      required: ["is_marking_scheme", "confidence", "title_language_tag", "header_language_tag", "evidence_page_numbers", "evaluator_instruction_page_numbers", "marking_scheme_page_numbers", "paper_code"],
+      required: ["document_type", "is_marking_scheme", "confidence", "title_language_tag", "header_language_tag", "evidence_page_numbers", "evaluator_instruction_page_numbers", "marking_scheme_page_numbers", "paper_code"],
       properties: {
+        document_type: { type: "string", enum: ["QUESTION_PAPER", "MARKING_SCHEME", "UNKNOWN"] },
         is_marking_scheme: { type: "boolean" },
         confidence: { type: ["number", "null"], minimum: 0, maximum: 1 },
         title_language_tag: { type: ["string", "null"] },
@@ -455,8 +452,8 @@ const defaultMistralRequestTimeoutMs = 120_000;
 const blueprintLanguageAnalysisSystemPrompt = [
   "Analyze OCR pages from one uploaded blueprint document. Do not extract rules or rewrite the document.",
   "Identify every language present using valid BCP 47 tags, including mixed-language pages.",
-  "Classify whether this is a marking scheme from its title, headings, table roles, question/value-point structure, and instructions in any language or script. Do not rely on English words.",
-  "Return document_analysis with title/header language evidence, instruction-page and marking-scheme-page numbers, and a paper code only when visible in the document.",
+  "Classify this as QUESTION_PAPER, MARKING_SCHEME, or UNKNOWN from its title, headings, table roles, question/value-point structure, and instructions in any language or script. Do not rely on English words.",
+  "Return document_analysis with document_type, title/header language evidence, instruction-page and marking-scheme-page numbers, and a paper code only when visible in the document.",
   "Classify multilingual content as MONOLINGUAL, DUPLICATE_TRANSLATIONS when blocks express the same rules, DISTINCT_REQUIREMENTS when language blocks contain additional requirements, or MIXED_OR_UNCERTAIN when evidence is insufficient.",
   "Page language evidence must preserve every detected language; never treat a bilingual document as separate documents.",
   "Choose a primary language only from detected languages. If uncertain, set tag to null and confidence to null.",
@@ -580,6 +577,7 @@ export class MistralBlueprintLanguageAnalyzer {
         }))
       })),
       documentAnalysis: {
+        documentType: analysis.document_analysis.document_type,
         isMarkingScheme: analysis.document_analysis.is_marking_scheme,
         confidence: analysis.document_analysis.confidence,
         titleLanguageTag: analysis.document_analysis.title_language_tag,
@@ -605,69 +603,66 @@ export class MistralBlueprintRuleExtractor {
   async extractRules(input: {
     primaryLanguage: string;
     pages: BlueprintStructuredOcrPage[];
-    evaluatorInstructionPageNumbers?: number[];
-    markingSchemePageNumbers?: number[];
   }): Promise<BlueprintExtractionResult> {
-    const chunks = markingSchemeExtractionChunks(input.pages, input.evaluatorInstructionPageNumbers, input.markingSchemePageNumbers);
+    const chunks = structuralExtractionChunks(input.pages);
     const skeletonPasses = await Promise.all(chunks.map((pages) => this.extractSkeletonChunk(input.primaryLanguage, pages)));
     const consolidated = consolidateBlueprintSkeletons(skeletonPasses.map((pass) => pass.result));
-    const questionPasses = await Promise.all(chunks.map((pages) => this.extractQuestionSchemeChunk(input.primaryLanguage, consolidated.skeleton, pages)));
-    const questionEvidence = questionPasses.map((pass) => pass.result);
-    let mergedQuestions = mergeQuestionSchemesWithEvidence(questionEvidence);
-    let audit = auditBlueprintExtraction({ skeleton: consolidated.skeleton, questionSchemes: questionEvidence, questionMarkingScheme: mergedQuestions.questionMarkingScheme });
+    const inventory = extractBlueprintQuestionInventory(input.pages);
+    let audit = auditBlueprintExtraction({
+      skeleton: consolidated.skeleton,
+      inventory,
+      observedQuestionNumbers: uniqueQuestionNumbers(skeletonPasses.flatMap((pass) => pass.result.question_index.map((question) => question.number)))
+    });
     const auditBeforeRecovery = audit;
     const recoveryPlan = buildBlueprintRecoveryPlan({
       audit,
-      skeleton: consolidated.skeleton,
+      inventory,
       pages: input.pages,
-      markingSchemePageNumbers: input.markingSchemePageNumbers
     });
-    let recoveryPass: Awaited<ReturnType<MistralBlueprintRuleExtractor["recoverMissingQuestionSchemes"]>> | undefined;
+    let recoveryPass: Awaited<ReturnType<MistralBlueprintRuleExtractor["recoverMissingQuestions"]>> | undefined;
     let recoveryFailure: { message: string; rawJson?: unknown } | undefined;
     if (recoveryPlan) {
       try {
-        recoveryPass = await this.recoverMissingQuestionSchemes(input.primaryLanguage, consolidated.skeleton, recoveryPlan.questionNumbers, recoveryPlan.pages);
+        recoveryPass = await this.recoverMissingQuestions(input.primaryLanguage, recoveryPlan.questionNumbers, recoveryPlan.pages);
       } catch (error) {
         recoveryFailure = {
-          message: error instanceof Error ? error.message : "Targeted question-scheme recovery failed.",
+          message: error instanceof Error ? error.message : "Targeted structural recovery failed.",
           ...(error instanceof BlueprintExtractionResponseError ? { rawJson: error.rawJson } : {})
         };
       }
     }
     if (recoveryPass) {
-      questionEvidence.push(recoveryPass.result);
-      mergedQuestions = mergeQuestionSchemesWithEvidence(questionEvidence);
-      audit = auditBlueprintExtraction({ skeleton: consolidated.skeleton, questionSchemes: questionEvidence, questionMarkingScheme: mergedQuestions.questionMarkingScheme });
+      const recovered = consolidateBlueprintSkeletons([consolidated.skeleton, { ...consolidated.skeleton, question_index: recoveryPass.result.question_index }]);
+      audit = auditBlueprintExtraction({
+        skeleton: recovered.skeleton,
+        inventory,
+        observedQuestionNumbers: uniqueQuestionNumbers(skeletonPasses.flatMap((pass) => pass.result.question_index.map((question) => question.number)).concat(recoveryPass.result.question_index.map((question) => question.number)))
+      });
     }
     const recoveredQuestionNumbers = auditBeforeRecovery.missingQuestionNumbers.filter((questionNumber) => !audit.missingQuestionNumbers.includes(questionNumber));
     const recovery = {
       attempted: recoveryPlan !== null,
       requestedQuestionNumbers: auditBeforeRecovery.missingQuestionNumbers,
       pageNumbers: recoveryPlan?.pageNumbers ?? [],
-      recoveredQuestionNumbers
+      recoveredQuestionNumbers,
+      ...(recoveryFailure ? { failure: recoveryFailure } : {})
     };
-    const passes = [...skeletonPasses, ...questionPasses, ...(recoveryPass ? [recoveryPass] : [])];
+    const passes = [...skeletonPasses, ...(recoveryPass ? [recoveryPass] : [])];
     const auditWarnings = blueprintExtractionAuditWarnings(audit);
     const recoveryWarnings = auditBeforeRecovery.missingQuestionNumbers.length > 0 && !recoveryPass
       ? [recoveryFailure
-        ? `Targeted recovery for missing question schemes failed: ${recoveryFailure.message}`
-        : "Missing numeric question schemes were detected, but no affected marking pages were available for targeted recovery."]
+        ? `Targeted recovery for missing structural questions failed: ${recoveryFailure.message}`
+        : "Missing numeric structural questions were detected, but no affected OCR pages were available for targeted recovery."]
       : [];
     return {
       provider: "mistral",
       model: this.config.extractorModel,
-      rules: markingSchemeRulesSchema.parse({
-        document_metadata: consolidated.skeleton.document_metadata,
-        evaluation_rules: consolidated.skeleton.evaluation_rules,
-        assessment_blueprint: consolidated.skeleton.assessment_blueprint,
-        question_marking_scheme: mergedQuestions.questionMarkingScheme
-      }),
+      rules: consolidateBlueprintSkeletons([consolidated.skeleton, ...(recoveryPass ? [{ ...consolidated.skeleton, question_index: recoveryPass.result.question_index }] : [])]).skeleton,
       confidence: averageConfidence(passes.map((pass) => pass.confidence)),
       sourceReferences: uniqueBy(passes.flatMap((pass) => pass.sourceReferences), (reference) => `${reference.pageNumber}:${reference.startOffset ?? ""}:${reference.endOffset ?? ""}:${reference.snippet ?? ""}`),
-      warnings: uniqueBy([...skeletonPasses.flatMap((pass) => pass.warnings), ...questionPasses.flatMap((pass) => pass.warnings), ...(recoveryPass?.warnings ?? []), ...consolidated.warnings, ...mergedQuestions.warnings, ...auditWarnings, ...recoveryWarnings], (warning) => warning),
+      warnings: uniqueBy([...skeletonPasses.flatMap((pass) => pass.warnings), ...(recoveryPass?.warnings ?? []), ...consolidated.warnings, ...auditWarnings, ...recoveryWarnings], (warning) => warning),
       rawJson: {
         skeletonPasses: skeletonPasses.map((pass) => pass.rawJson),
-        questionSchemePasses: questionPasses.map((pass) => pass.rawJson),
         recoveryPass: recoveryPass?.rawJson ?? null,
         recoveryFailure: recoveryFailure ?? null,
         auditBeforeRecovery
@@ -710,74 +705,36 @@ export class MistralBlueprintRuleExtractor {
     }
   }
 
-  private async extractQuestionSchemeChunk(primaryLanguage: string, skeleton: BlueprintSkeleton, pages: BlueprintStructuredOcrPage[]) {
-    const raw = await callMistral(this.config, "/v1/chat/completions", {
-      model: this.config.extractorModel,
-      temperature: 0,
-      response_format: { type: "json_schema", json_schema: { name: "question_scheme_extraction", strict: true, schema: questionSchemeExtractionJsonSchema } },
-      messages: [
-        { role: "system", content: questionSchemeExtractionSystemPrompt },
-        { role: "user", content: questionSchemeExtractionUserPrompt({ primaryLanguage, skeleton, pages }) }
-      ]
-    });
-    try {
-      return parseQuestionSchemeExtractionResult(raw);
-    } catch (error) {
-      throw new BlueprintExtractionResponseError(error instanceof Error ? error.message : "Question-scheme extraction response was invalid.", raw);
-    }
-  }
-
-  private async recoverMissingQuestionSchemes(
+  private async recoverMissingQuestions(
     primaryLanguage: string,
-    skeleton: BlueprintSkeleton,
     missingQuestionNumbers: string[],
     pages: BlueprintStructuredOcrPage[]
   ) {
     const raw = await callMistral(this.config, "/v1/chat/completions", {
       model: this.config.extractorModel,
       temperature: 0,
-      response_format: { type: "json_schema", json_schema: { name: "question_scheme_recovery", strict: true, schema: questionSchemeExtractionJsonSchema } },
+      response_format: { type: "json_schema", json_schema: { name: "blueprint_structural_recovery", strict: true, schema: blueprintSkeletonRecoveryJsonSchema } },
       messages: [
-        { role: "system", content: questionSchemeRecoverySystemPrompt },
-        { role: "user", content: questionSchemeRecoveryUserPrompt({ primaryLanguage, skeleton, missingQuestionNumbers, pages }) }
+        { role: "system", content: blueprintSkeletonExtractionSystemPrompt },
+        { role: "user", content: blueprintSkeletonRecoveryUserPrompt({ primaryLanguage, missingQuestionNumbers, pages }) }
       ]
     });
     try {
-      return parseQuestionSchemeExtractionResult(raw);
+      return parseBlueprintSkeletonRecoveryResult(raw);
     } catch (error) {
-      throw new BlueprintExtractionResponseError(error instanceof Error ? error.message : "Question-scheme recovery response was invalid.", raw);
+      throw new BlueprintExtractionResponseError(error instanceof Error ? error.message : "Structural Blueprint recovery response was invalid.", raw);
     }
   }
 }
 
-function markingSchemeExtractionChunks(
-  pages: BlueprintStructuredOcrPage[],
-  evaluatorInstructionPageNumbers: number[] = [],
-  markingSchemePageNumbers: number[] = []
-) {
-  const markingPageNumbers = new Set(markingSchemePageNumbers);
-  const instructionPageNumbers = new Set(evaluatorInstructionPageNumbers);
-  const markingPages = markingPageNumbers.size > 0 ? pages.filter((page) => markingPageNumbers.has(page.pageNumber)) : pages;
-  const instructionPages = pages.filter((page) => instructionPageNumbers.has(page.pageNumber));
-  if (instructionPages.length === 0 || markingPages.length === pages.length) return chunkPages(markingPages);
-  return chunkPages(markingPages).map((chunk) => [...instructionPages, ...chunk]);
-}
-
-function chunkPages(pages: BlueprintStructuredOcrPage[]) {
+function structuralExtractionChunks(pages: BlueprintStructuredOcrPage[]) {
+  const ordered = pages.slice().sort((left, right) => left.pageNumber - right.pageNumber);
   const chunks: BlueprintStructuredOcrPage[][] = [];
-  let chunk: BlueprintStructuredOcrPage[] = [];
-  let characters = 0;
-  for (const page of pages) {
-    if (chunk.length > 0 && (chunk.length >= 6 || characters + page.markdown.length > 10_000)) {
-      chunks.push(chunk);
-      chunk = [];
-      characters = 0;
-    }
-    chunk.push(page);
-    characters += page.markdown.length;
+  for (let start = 0; start < ordered.length; start += 5) {
+    const chunk = ordered.slice(start, start + 6);
+    if (chunk.length > 0) chunks.push(chunk);
   }
-  if (chunk.length > 0) chunks.push(chunk);
-  return chunks.length > 0 ? chunks : [pages];
+  return chunks.length > 0 ? chunks : [ordered];
 }
 
 function averageConfidence(values: Array<number | null>) {
@@ -798,6 +755,10 @@ function uniqueBy<T>(values: T[], key: (value: T) => string) {
     seen.add(valueKey);
     return true;
   });
+}
+
+function uniqueQuestionNumbers(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()))];
 }
 
 export class MistralBatchProvider {

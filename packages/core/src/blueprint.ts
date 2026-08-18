@@ -203,22 +203,31 @@ export const blueprintExtractionEnvelopeSchema = z.object({
   providerMetadata: blueprintRulesJsonSchema.optional()
 });
 
-const markingSchemeSourcePagesSchema = z.array(z.number().int().positive()).min(1);
-const markingSchemeAlternativeSchema = z.object({ label: z.string().nullable(), marks: z.number().nonnegative().nullable(), value_points: z.array(z.string()), acceptable_answers: z.array(z.string()), marking_notes: z.array(z.string()), source_pages: markingSchemeSourcePagesSchema }).strict();
-const markingSchemePartSchema = z.object({ label: z.string().nullable(), marks: z.number().nonnegative().nullable(), value_points: z.array(z.string()), acceptable_answers: z.array(z.string()), marking_notes: z.array(z.string()), alternatives: z.array(markingSchemeAlternativeSchema), source_pages: markingSchemeSourcePagesSchema }).strict();
-const markingSchemeQuestionSchema = z.object({ number: z.string().min(1), section: z.string().nullable(), marks: z.number().nonnegative().nullable(), parts: z.array(markingSchemePartSchema), alternatives: z.array(markingSchemeAlternativeSchema), value_points: z.array(z.string()), acceptable_answers: z.array(z.string()), marking_notes: z.array(z.string()), source_pages: markingSchemeSourcePagesSchema }).strict();
-
-/** The only editable Blueprint shape: a reviewed marking scheme. */
-export const markingSchemeRulesJsonSchema = z.object({
-  document_metadata: z.object({ title: z.string().nullable(), subject: z.string().nullable(), examination: z.string().nullable(), paper_code: z.string().nullable(), session: z.string().nullable(), total_marks: z.number().nonnegative().nullable(), source_pages: markingSchemeSourcePagesSchema }).strict(),
-  evaluation_rules: z.array(z.object({ rule: z.string().min(1), source_pages: markingSchemeSourcePagesSchema }).strict()),
-  assessment_blueprint: z.object({ sections: z.array(z.object({ name: z.string().min(1), question_range: z.string().nullable(), question_type: z.string().nullable(), choice_rules: z.array(z.string()), declared_marks: z.number().nonnegative().nullable(), source_pages: markingSchemeSourcePagesSchema }).strict()), total_marks: z.number().nonnegative().nullable(), source_pages: markingSchemeSourcePagesSchema }).strict(),
-  question_marking_scheme: z.array(markingSchemeQuestionSchema)
+const blueprintSourcePagesSchema = z.array(z.number().int().positive()).min(1);
+const blueprintQuestionIndexSchema = z.object({
+  number: z.string().min(1),
+  section: z.string().nullable(),
+  marks: z.number().nonnegative().nullable(),
+  question_type: z.string().nullable(),
+  part_labels: z.array(z.string().min(1)),
+  alternative_labels: z.array(z.string().min(1)),
+  source_pages: blueprintSourcePagesSchema
 }).strict();
+
+/** The only editable Blueprint shape: structural paper-generation rules. */
+export const blueprintRulesSchema = z.object({
+  document_metadata: z.object({ title: z.string().nullable(), subject: z.string().nullable(), examination: z.string().nullable(), paper_code: z.string().nullable(), session: z.string().nullable(), total_marks: z.number().nonnegative().nullable(), source_pages: blueprintSourcePagesSchema }).strict(),
+  evaluation_rules: z.array(z.object({ rule: z.string().min(1), source_pages: blueprintSourcePagesSchema }).strict()),
+  assessment_blueprint: z.object({ sections: z.array(z.object({ name: z.string().min(1), printed_identifier: z.string().nullable(), question_range: z.string().nullable(), question_type: z.string().nullable(), choice_rules: z.array(z.string()), declared_marks: z.number().nonnegative().nullable(), source_pages: blueprintSourcePagesSchema }).strict()), total_marks: z.number().nonnegative().nullable(), source_pages: blueprintSourcePagesSchema }).strict(),
+  question_index: z.array(blueprintQuestionIndexSchema)
+}).strict();
+
+/** Backward-compatible export name for API consumers during the schema transition. */
+export const markingSchemeRulesJsonSchema = blueprintRulesSchema;
 
 export const blueprintDraftSaveSchema = z
   .object({
-    rules: markingSchemeRulesJsonSchema,
+    rules: blueprintRulesSchema,
     reviewVersion: z.number().int().nonnegative()
   })
   .strict();
@@ -256,6 +265,7 @@ export type BlueprintLanguageEvidence = z.output<typeof blueprintLanguageEvidenc
 export type BlueprintPrimaryLanguageSelection = z.output<typeof blueprintPrimaryLanguageSelectionSchema>;
 export type BlueprintLanguageAnalysis = z.output<typeof blueprintLanguageAnalysisSchema>;
 export type BlueprintSourceReference = z.output<typeof blueprintSourceReferenceSchema>;
+export type BlueprintRules = z.output<typeof blueprintRulesSchema>;
 export type BlueprintExtractionEnvelope = z.output<typeof blueprintExtractionEnvelopeSchema>;
 export type BlueprintDocumentMetadata = z.output<typeof blueprintDocumentMetadataSchema>;
 export type BlueprintDocumentStatus = (typeof blueprintDocumentStatuses)[number];

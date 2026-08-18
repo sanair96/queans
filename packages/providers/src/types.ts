@@ -94,6 +94,7 @@ export interface BlueprintLanguageAnalysisResult {
     languages: BlueprintLanguageEvidenceResult[];
   }>;
   documentAnalysis: {
+    documentType: "QUESTION_PAPER" | "MARKING_SCHEME" | "UNKNOWN";
     isMarkingScheme: boolean;
     confidence: number | null;
     titleLanguageTag: string | null;
@@ -142,6 +143,7 @@ export interface BlueprintMarkReconciliation {
 
 export interface BlueprintExtractionAudit {
   reconciled: boolean;
+  inventoryQuestionNumbers: string[];
   expectedQuestionNumbers: string[];
   extractedQuestionNumbers: string[];
   missingQuestionNumbers: string[];
@@ -156,6 +158,10 @@ export interface BlueprintExtractionRecovery {
   requestedQuestionNumbers: string[];
   pageNumbers: number[];
   recoveredQuestionNumbers: string[];
+  failure?: {
+    message: string;
+    rawJson?: unknown;
+  } | undefined;
 }
 
 export interface BlueprintExtractionResult {

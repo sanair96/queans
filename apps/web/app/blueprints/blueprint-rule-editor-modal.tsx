@@ -79,9 +79,9 @@ export function BlueprintRuleEditorModal({
       <div className="rule-editor-modal-shell">
         <header className="rule-editor-modal-head">
           <div>
-            <p className="eyebrow">Review before saving</p>
-            <h2 id="rule-editor-title">Review extracted marking scheme</h2>
-            <p className="muted" id="rule-editor-description">Check the extracted document details, evaluator guidance, assessment sections, and question marking before approving this Blueprint.</p>
+            <p className="eyebrow">Teacher review</p>
+            <h2 id="rule-editor-title">Review your Blueprint</h2>
+            <p className="muted" id="rule-editor-description">Check the paper details, assessment sections, question groups, marks, choices, and source pages before saving.</p>
           </div>
           <button aria-label="Close rule editor" className="rule-modal-close" disabled={saving} type="button" onClick={requestClose}><X size={20} aria-hidden="true" /></button>
         </header>
@@ -89,11 +89,11 @@ export function BlueprintRuleEditorModal({
           <MarkingSchemeReviewForm value={value} onChange={onChange} disabled={!canSave || saving} />
         </div>
         <footer className="rule-editor-modal-foot">
-          <p className={notice ? "rule-editor-notice" : "editor-caption"}>{notice || (dirty ? "Changes ready for approval" : "Review the extracted values, then approve this Blueprint")}</p>
+          <p className={notice ? "rule-editor-notice" : "editor-caption"}>{notice || (dirty ? "Changes ready to save" : "Review the extracted values, then save your Blueprint")}</p>
           <div className="button-row">
             <button className="btn secondary" disabled={saving} type="button" onClick={requestClose}>Close</button>
             <button className="btn" disabled={!canSave || saving} type="button" onClick={() => void save()}>
-              <Save size={16} aria-hidden="true" /> {saving ? "Saving" : "Approve & save Blueprint"}
+              <Save size={16} aria-hidden="true" /> {saving ? "Saving" : "Save Blueprint"}
             </button>
           </div>
         </footer>
